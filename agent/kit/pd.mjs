@@ -736,6 +736,21 @@ async function serve(extensions) {
     restart: async (...folders) => (await stop(), await start(folders), `restarted with ${folders.length} extension folder(s).`),
     stop: async () => (await stop(), setTimeout(() => process.exit(0), 100), 'stopped.'),
   };
+  // The model is not waited for: a claim that used its commands or its minutes is closed here, with a
+  // screenshot of the window as it is. A run always ends with a report, whatever the model does.
+  const MINUTES = Number(process.env.RVP_CLAIM_MINUTES) || 12;
+  let since; // when the work on the current claim started (its first action on the app)
+  const giveUp = async why => {
+    const n = open()[0];
+    await shot(`claim ${n} not decided`).catch(() => undefined);
+    verdicts.set(n, { claim: claims[n - 1], status: 'skipped', reason: `The model gave no verdict ${why}. The screenshot shows the window at that moment.`, screenshots: pending });
+    pending = [];
+    sinceVerdict = 0;
+    since = undefined;
+    writeFileSync(join(out, 'checks.json'), JSON.stringify(claims.map((_, i) => verdicts.get(i + 1)).filter(Boolean), null, 2));
+    if (!open().length) writeFileSync(join(out, 'done'), '');
+    return `Claim ${n} was closed as skipped: no verdict ${why}. ${open().length ? `Go on with claim ${open()[0]}; you may still send pass ${n} or fail ${n} if you know.` : ''}\n`;
+  };
   commands.claims = async () => claims.map((c, i) => `${i + 1}. ${c}`).join('\n');
   for (const [verb, status] of [['pass', 'passed'], ['fail', 'failed'], ['skip', 'skipped']]) {
     commands[verb] = async (...args) => {
@@ -764,6 +779,7 @@ async function serve(extensions) {
       }
       const note = status === 'skipped' ? '' : (await shot(`claim ${n} ${status}`, outlined))[1];
       sinceVerdict = -1; // this command is counted right after
+      since = undefined;
       // a second verdict for a claim replaces the first: a wrong one is corrected, not argued about
       const again = verdicts.has(n);
       verdicts.set(n, { claim, status, reason: readable(rest.join(' ')), screenshots: pending });
@@ -786,9 +802,14 @@ async function serve(extensions) {
         const [name, ...rest] = JSON.parse(body);
         const step = told(name, rest); // before the action: the ids are those of the tree the model read
         try {
-          // going in circles: nothing but a verdict is accepted any more, and a skip is a fine verdict
-          if (sinceVerdict >= (verdicts.size ? 15 : 25) && !['pass', 'fail', 'skip', 'stop', 'restart'].includes(name))
-            throw new Error(`${sinceVerdict} commands without a verdict: not run. Record pass, fail or skip for the claim you are on (skip <number> "<what you tried>" if you could not see it). After that you can go on.`);
+          // going in circles, or too long on one claim: it is closed without the model, and the command goes on
+          let closed = '';
+          const verdict = ['pass', 'fail', 'skip', 'stop', 'restart', 'claims'].includes(name);
+          if (['click', 'hover', 'fill', 'press'].includes(name)) since ??= Date.now();
+          if (open().length && !verdict) {
+            if (sinceVerdict >= (verdicts.size ? 15 : 25)) closed = await giveUp(`after ${sinceVerdict} commands`);
+            else if (since && Date.now() - since > MINUTES * 60_000) closed = await giveUp(`after ${MINUTES} minutes`);
+          }
           if (!commands[name]) throw new Error(`unknown command "${name}". The commands are: ${Object.keys(commands).filter(c => c !== 'stop').join(', ')}. Example: node rvp/pd.mjs click "Images"`);
           let reopened = '';
           if (page.isClosed() && name !== 'stop' && name !== 'restart') {
@@ -797,7 +818,7 @@ async function serve(extensions) {
             await start(folders);
             reopened = 'The app window had closed, so the app was started again: it is back on the Dashboard.\n';
           }
-          text = reopened + (await commands[name](...rest));
+          text = closed + reopened + (await commands[name](...rest));
         } catch (error) {
           ok = false;
           text = `error: ${String(error.message ?? error).split('\n').slice(0, 6).join('\n')}`;
