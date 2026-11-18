@@ -18,7 +18,7 @@ sentence says, not what you meant.
 ## What happens
 
 1. **agent job** (no secret, read-only token)
-   - installs Ollama, the model and the pi agent (pinned, cached);
+   - installs mistral.rs, the model (a q4k UQFF file from Hugging Face) and the pi agent (pinned, cached);
    - fetches the pull request, `pnpm install`, `pnpm build`;
    - starts the built app and keeps it running;
    - the model reads the instruction and the PR description, then drives the app with a small
@@ -42,7 +42,7 @@ TASK.md         the task given to the model
 actions.log     every command the model ran on the app, with what the app answered
 steps.log       the same actions in plain words, with names instead of ids (shown in the comment)
 progress.log    one line per command (what the run page shows live)
-build.log       pnpm install and build output (build-base.log for the base), ollama-pull.log
+build.log       pnpm install and build output (build-base.log for the base), model-server.log
 notes.md        what the model says it did
 agent.log       what the model said at the end of each attempt
 pi-session/     the whole conversation of the model (JSONL)
@@ -71,7 +71,7 @@ video and `actions.log` are there so a person can check them.
 ## Triggering it with a pull request comment
 
 `examples/pr-comment.yml` starts a run when someone who can push to the repository comments
-`/rvp <what to check>` on a pull request (`/rvp macos model=qwen3.5:4b <what to check>` to pick the
+`/rvp <what to check>` on a pull request (`/rvp macos model=mistralrs-community/Qwen3.5-4B-UQFF <what to check>` to pick the
 runner and the model), and
 posts the result on that pull request. To use it:
 
@@ -97,12 +97,12 @@ Both run prebuilt files from their `dist/` folder: nothing is installed for rvp 
 ## Limits
 
 - The model runs on CPU. Expect slow runs, and `no_result` when it gets lost.
-  An 8B model with a 32k context needs about 10 GB of memory; macOS runners have about 7 GB:
+  A 9B model with a 32k context needs about 10 GB of memory; macOS runners have about 7 GB:
   pass a smaller `model` there or use a larger runner.
 - A verdict is what a small model concluded from the text of the window. It cannot see images.
   The comment shows the action log and screenshots for that reason.
 - No container engine on macOS runners: only UI checks there.
-- Three operating systems times (Ollama + model) is more than the 10 GB cache of a repository:
+- Three operating systems times (mistral.rs + model) is more than the 10 GB cache of a repository:
   the least recently used one is evicted and downloaded again.
 
 ## Development
@@ -125,7 +125,6 @@ bun run local 1234 "verify that I can install 3 extensions" [model] [--before-af
 
 It runs the `run:` steps of `agent/action.yml` in `.local/`, reuses the downloads and the build on
 the next run for the same PR, and prints the comment without posting it. Nothing is written to GitHub.
-If an Ollama is already listening on port 11434, that one is used (with its own model store) instead of the pinned one.
 
 To try the session tool alone, in a built Podman Desktop checkout:
 

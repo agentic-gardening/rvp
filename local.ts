@@ -28,7 +28,7 @@ const baseBuilt = existsSync(baseMarker) && readFileSync(baseMarker, 'utf8') ===
 
 // what a cache hit, or a machine that is already set up, would skip
 const skip: Record<string, boolean> = {
-  'download ollama and pi': existsSync(join(work, 'rvp-tools/pi')),
+  'download mistral.rs and pi': existsSync(join(work, 'rvp-tools/mistralrs')),
   'fetch the pull request': built,
   'build Podman Desktop': built,
   'fetch the base of the pull request': baseBuilt,
@@ -66,7 +66,7 @@ for (const step of action.runs.steps) {
   else if (step.name === 'build the base') writeFileSync(baseMarker, pr);
 }
 
-bash(`pkill -f "${work}/rvp-tools/ollama" || true`, work, base);
+bash(`pkill -f "${work}/rvp-tools/mistralrs" || true`, work, base);
 const out = join(work, 'rvp-out');
 const run = (cmd: string[], cwd = root): string => {
   const done = Bun.spawnSync(cmd, { cwd, stderr: 'inherit' });

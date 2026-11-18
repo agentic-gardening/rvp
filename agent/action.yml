@@ -12,8 +12,8 @@ inputs:
     description: Repository of the pull request
     default: podman-desktop/podman-desktop
   model:
-    description: Ollama model tag (must support tool calling)
-    default: qwen3.5:9b
+    description: Hugging Face repository of a UQFF model with a q4k file (must support tool calling)
+    default: mistralrs-community/Qwen3.5-9B-UQFF
   timeout-minutes:
     description: Time the model may spend
     default: '60'
@@ -54,61 +54,69 @@ runs:
         echo "RVP_TOOLS=$RUNNER_TEMP/rvp-tools" >> "$GITHUB_ENV"
 
     # Tools first, and their cache is saved before any PR code runs, so PR code cannot poison it.
-    - name: restore ollama, pi and the model
+    - name: restore mistral.rs, pi and the model
       id: tools
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/rvp-tools
-        key: rvp-tools-${{ runner.os }}-${{ runner.arch }}-ollama0.40.16-pi1.5.2-${{ inputs.model }}
+        key: rvp-tools-${{ runner.os }}-${{ runner.arch }}-mistralrs0.9.5-pi1.5.2-${{ inputs.model }}
 
-    - name: download ollama and pi
+    - name: download mistral.rs and pi
       if: steps.tools.outputs.cache-hit != 'true'
       shell: bash
       run: |
         # pinned release assets: name and sha256
         case "$RUNNER_OS" in
-          Linux)   O=ollama-linux-amd64.tar.zst   OS=87bfafb2acbc89b2e6a1be0a9043de6aa75fb450696f86bc426e65fc448f788d
+          Linux)   O=mistralrs-cpu-x86_64-unknown-linux-gnu.tar.gz OS=9b542da90b6541abd599ff275e3246fa6e144885bdcd67d1f0aefdba1729f7b5
                    C=pi-linux-x64.tar.gz          CS=811c6f2c9e7aaee252b5404252e556fb713aa209c1f7f924226aa77d4ef70cb5 ;;
-          macOS)   O=ollama-darwin.tgz            OS=a743717494315da7cd352982b805f6b992d4b4452ca117fd5fbf86c4ee46fca0
+          macOS)   O=mistralrs-metal-aarch64-apple-darwin.tar.gz   OS=dcfb2e6c43692e391e3bfa8a0f1e3140447a492d5af0ae00731476eb67641815
                    C=pi-darwin-arm64.tar.gz       CS=56b5e194d485ced555667b8ba3276157a8272e9ecde9e001e428af80985bdd9b ;;
-          Windows) O=ollama-windows-amd64.zip     OS=50fcf5ad54277f2fa5d173ebfc93bcb017adbc0c9ef2314daabc96ca9e6aa64e
+          Windows) O=mistralrs-cpu-x86_64-pc-windows-msvc.zip      OS=64d567c299a5c97ef265aa0362649aafb968af47706810df640f74fe8ea4702a
                    C=pi-windows-x64.zip           CS=e6adb8cb8c84eca14391ad24b363de9d2be98a89ca3ba3fdee1fa4de32b7f2e8 ;;
         esac
         cd "$RVP_TOOLS"
-        curl -fsSL --retry 3 -o "$O" "https://github.com/ollama/ollama/releases/download/v0.40.16/$O"
+        curl -fsSL --retry 3 -o "$O" "https://github.com/EricLBuehler/mistral.rs/releases/download/v0.9.5/$O"
         curl -fsSL --retry 3 -o "$C" "https://github.com/earendil-works/pi/releases/download/v1.5.2/$C"
         # Git Bash on Windows has sha256sum only, macOS has shasum only
         if command -v sha256sum > /dev/null; then sum=(sha256sum); else sum=(shasum -a 256); fi
         printf '%s  %s\n%s  %s\n' "$OS" "$O" "$CS" "$C" | "${sum[@]}" -c -
-        rm -rf ollama pi && mkdir ollama pi
-        for pair in "$O:ollama" "$C:pi"; do
+        rm -rf mistralrs pi && mkdir mistralrs pi
+        for pair in "$O:mistralrs" "$C:pi"; do
           file=${pair%%:*} dir=${pair##*:}
           case "$file" in
             *.zip)     unzip -q "$file" -d "$dir" ;;
-            *.tar.zst) tar --zstd -xf "$file" -C "$dir" ;;
             *)         tar -xzf "$file" -C "$dir" ;;
           esac
           rm "$file"
         done
 
-    - name: start ollama and pull the model
+    - name: start the model server
       shell: bash
       env:
         MODEL: ${{ inputs.model }}
       run: |
-        ollama=$(find "$RVP_TOOLS/ollama" -type f \( -name ollama -o -name ollama.exe \) | head -1)
+        mistralrs=$(find "$RVP_TOOLS/mistralrs" -type f \( -name mistralrs -o -name mistralrs.exe \) | head -1)
         pi=$(find "$RVP_TOOLS/pi" -type f \( -name pi -o -name pi.exe \) | head -1)
-        [ -n "$ollama" ] && [ -n "$pi" ] || { echo "ollama or pi binary not found"; exit 1; }
-        chmod +x "$ollama" "$pi"
+        [ -n "$mistralrs" ] && [ -n "$pi" ] || { echo "mistralrs or pi binary not found"; exit 1; }
+        chmod +x "$mistralrs" "$pi"
         echo "RVP_PI=$pi" >> "$GITHUB_ENV"
-        export OLLAMA_MODELS="$RVP_TOOLS/models" OLLAMA_CONTEXT_LENGTH=32768
-        nohup "$ollama" serve > "$RVP_OUT/ollama.log" 2>&1 &
-        for _ in $(seq 60); do curl -sf http://127.0.0.1:11434/api/version > /dev/null && break; sleep 1; done
-        echo "pulling $MODEL (progress in ollama-pull.log of the result folder)"
-        "$ollama" pull "$MODEL" > "$RVP_OUT/ollama-pull.log" 2>&1 || { tail -n 20 "$RVP_OUT/ollama-pull.log"; exit 1; }
+        # the model is downloaded here, into the cached folder
+        export HF_HOME="$RVP_TOOLS/hf" RAYON_NUM_THREADS="$(nproc 2> /dev/null || getconf _NPROCESSORS_ONLN)"
+        cpu=(--cpu)
+        if [ "$RUNNER_OS" = macOS ]; then cpu=(); fi # the macOS build uses the GPU
+        # one conversation at a time: the default (32) reserves memory for 32
+        echo "loading $MODEL on $RAYON_NUM_THREADS threads (progress in model-server.log of the result folder)"
+        nohup "$mistralrs" serve "${cpu[@]}" -p 1234 --no-ui --max-model-len 32768 --max-seqs 1 --prefix-cache-n 2 -m "$MODEL" --from-uqff q4k > "$RVP_OUT/model-server.log" 2>&1 &
+        server=$!
+        for _ in $(seq 1800); do
+          curl -sf http://127.0.0.1:1234/v1/models > /dev/null && break
+          kill -0 "$server" 2> /dev/null || { tail -n 30 "$RVP_OUT/model-server.log"; exit 1; }
+          sleep 1
+        done
+        curl -sf http://127.0.0.1:1234/v1/models > /dev/null || { tail -n 30 "$RVP_OUT/model-server.log"; exit 1; }
         echo "done in ${SECONDS}s"
 
-    - name: save ollama, pi and the model
+    - name: save mistral.rs, pi and the model
       if: steps.tools.outputs.cache-hit != 'true'
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
@@ -246,10 +254,11 @@ runs:
           const pi = process.env.RUNNER_TEMP + "/pi";
           fs.mkdirSync(pi, { recursive: true });
           fs.writeFileSync(pi + "/models.json", JSON.stringify({ providers: { local: {
-            baseUrl: "http://127.0.0.1:11434/v1", api: "openai-completions", apiKey: "none",
+            baseUrl: "http://127.0.0.1:1234/v1", api: "openai-completions", apiKey: "none",
             // not OpenAI: without these pi sends fields a local server refuses
             compat: { supportsStore: false, supportsDeveloperRole: false, supportsReasoningEffort: false, maxTokensField: "max_tokens" },
-            models: [{ id: process.env.MODEL, contextWindow: 32768, maxTokens: 8192 }],
+            // mistral.rs serves its model under the name "default"
+            models: [{ id: "default", contextWindow: 32768, maxTokens: 8192 }],
           } } }));
           fs.writeFileSync(pi + "/settings.json", JSON.stringify({
             // the defaults assume a 128k context; a model on CPU can be silent for more than 5 minutes
@@ -278,7 +287,8 @@ runs:
         tail -n +1 -f "$RVP_OUT/progress.log" &
         progress=$!
         # the prompt is a file: no command-line length limit on Windows, and the model can read it again
-        prompt="Read the file rvp/TASK.md and carry out the task it describes."
+        # the full path: a small model given "rvp/TASK.md" may look for it somewhere else
+        prompt="Read the file $(pwd -W 2> /dev/null || pwd)/rvp/TASK.md and carry out the task it describes. Run every command from this folder."
         more=()
         end=$((SECONDS + MINUTES * 60))
         # a small model often ends its turn early: while no verdict is recorded, send it back to work
@@ -286,7 +296,7 @@ runs:
           [ "$SECONDS" -lt "$end" ] || break
           echo "--- attempt $try" | tee -a "$RVP_OUT/agent.log"
           # no context files, skills, extensions or templates: the prompt stays small, and the checkout cannot add to it
-          "$RVP_PI" -p --model "local/$MODEL" --tools read,bash,write -nc -ns -ne -np --offline --session-dir "$RVP_OUT/pi-session" "${more[@]}" "$prompt" >> "$RVP_OUT/agent.log" 2>&1 &
+          "$RVP_PI" -p --model local/default --tools read,bash,write -nc -ns -ne -np --offline --session-dir "$RVP_OUT/pi-session" "${more[@]}" "$prompt" >> "$RVP_OUT/agent.log" 2>&1 &
           agent=$!
           ( sleep $((end - SECONDS)); kill "$agent" 2> /dev/null ) &
           watchdog=$!

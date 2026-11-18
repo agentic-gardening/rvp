@@ -22,9 +22,9 @@ on:
         type: string
         default: podman-desktop/podman-desktop
       model:
-        description: Ollama model tag
+        description: Hugging Face repository of a UQFF model with a q4k file
         type: string
-        default: qwen3.5:9b
+        default: mistralrs-community/Qwen3.5-9B-UQFF
       timeout-minutes:
         description: Time the model may spend
         type: string
