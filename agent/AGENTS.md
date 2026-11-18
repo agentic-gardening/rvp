@@ -7,69 +7,78 @@ it shows, and record for each claim whether it is true.
 ## Commands
 
 ```
-node rvp/pd.mjs look                 print what the window contains
-node rvp/pd.mjs look "Kind"          print only the lines around a text (use this on big pages)
-node rvp/pd.mjs click e114           click the element with id e114
-node rvp/pd.mjs hover e114           put the mouse on the element: prints its label and its tooltip
-node rvp/pd.mjs fill e77 "some text" type into a field
-node rvp/pd.mjs press Enter          press a key
-node rvp/pd.mjs eval "document.title"   run JavaScript in the page and print the value
-node rvp/pd.mjs eval e114 "el => el.getAttribute('aria-describedby')"   run a function on one element
+node rvp/pd.mjs look                      print what can be used or read in the window
+node rvp/pd.mjs look "hello"              print the row or the section that contains a text
+node rvp/pd.mjs look e538                 print one element and everything inside it
+node rvp/pd.mjs click "Images"            click something, by its name
+node rvp/pd.mjs click e114                click something, by its id (when several things have the same name)
+node rvp/pd.mjs hover "Save Image"        put the mouse on it: prints its tooltip
+node rvp/pd.mjs hover e538                on a row: prints the tooltip of every button of that row
+node rvp/pd.mjs fill "search images" "hello"   type into a field
+node rvp/pd.mjs press Enter               press a key
 node rvp/pd.mjs shot e461 "the Local extensions tab"   save a screenshot with element e461 outlined in red
 node rvp/pd.mjs pass e461 "<claim>" "<what you saw that proves it>"
 node rvp/pd.mjs fail e461 "<claim>" "<what you saw instead>"
 node rvp/pd.mjs skip "<claim>" "<why it could not be checked>"
-node rvp/pd.mjs restart /path/to/extension   restart the app with locally built extensions
+node rvp/pd.mjs eval "document.title"     run JavaScript in the page and print the value
+node rvp/pd.mjs eval e114 "el => el.getAttribute('aria-describedby')"   run a function on one element
+node rvp/pd.mjs restart /path/to/extension   only for an extension you built from source: relaunch the app with it
 ```
 
 ## Reading the window
 
-The first line of `look` says where you are: the page, and the tabs of that page with the open one.
-Then comes a tree. Each line is `role "name" [id=...]`, sometimes followed by its text:
+The first line of every answer says where you are: the page, the tabs of that page with the open
+one, and the tooltip if one is shown. Then come lines `role "name" [id=...]`, sometimes with a text:
 
 ```
 You are on page /extensions. Tabs here: [Installed] (open), Catalog, Local extensions.
-- link "Extensions" [id=e114]
-- button "Local extensions" [id=e421]
-- region "podman-desktop.kind" [id=e442]:
-    - button "kind extension details" [id=e451]:
-      - generic [id=e452]: Kind extension
-    - status "Extension status" [id=e455]:
-      - generic [id=e459]: Installed
+- navigation "AppNavigation" [id=e27]:
+  - link "Extensions" [id=e114]
+- region "extensions" [id=e512]:
+  - button "Local extensions" [id=e421]
+  - region "podman-desktop.kind" [id=e442]:
+    - button "kind extension details" [id=e451]
+    - status "Extension status" [id=e455]: Installed
 ```
 
-- To click something, use its id, copied exactly as printed: `node rvp/pd.mjs click e114`. Ids look
-  like `e114` or `f1e114`.
+- Use the name: `node rvp/pd.mjs click "Local extensions"`. When several things have that name the
+  answer lists them with their ids: then use the id, copied exactly (`e114` or `f1e114`).
+- After `click`, `fill` or `press` the answer shows only what changed: the lines that appeared,
+  under what they are in, and the first lines that went away. "Nothing changed in the window"
+  means your action had no visible effect.
 - Tabs are buttons. Only the first line tells which tab is open. In the example the open tab is
-  Installed: what you see is the Installed tab. To see the Local extensions tab, click it
-  (`node rvp/pd.mjs click e421`) and check that the first line now says `[Local extensions] (open)`.
+  Installed. To see the Local extensions tab, click it and check that the first line now says
+  `[Local extensions] (open)`.
+- A list (images, containers...) shows one `row` per item. `look "<name of the item>"` prints that
+  row with its buttons. Actions that are not in the row are in its `kebab menu` button (click it:
+  the menu items appear) or on the details page of the item (click its name).
 - Ids exist only for these commands. The page does not know them: `document.querySelector('#e114')`
-  finds nothing. To read something about an element, use `hover e114` or `eval e114 "el => ..."`.
-- **Ids change after every click, fill or press.** The command prints the new window: take ids from
-  the newest output only.
-- You cannot see pictures. Everything you know about the app comes from `look` and `eval`.
-- Use `eval` for things the tree does not say, such as a scrollbar:
-  `node rvp/pd.mjs eval "(() => { const el = document.querySelector('[aria-label=\"content\"]'); return el.scrollHeight > el.clientHeight })()"`
+  finds nothing. To learn about an element use `look e114`, `hover e114` or `eval e114 "el => ..."`.
+- You cannot see pictures. Everything you know about the app comes from these commands.
+- If something is not there yet (a list still loading), `look "<text>"` again.
 
-Tooltips: a tooltip exists only while the mouse is on the element. `hover <id>` prints it:
+Tooltips: a tooltip exists only while the mouse is on the element. `hover` prints it, and where it is:
 
 ```
-hovering button "Save Image"
-  label: Save Image    title: (none)    disabled: no
-  tooltip shown: "Save image to a local directory"
+hovering button "Update Image" (disabled)
+  styled tooltip, shown above the button: "Cannot update an image used by a container"
 ```
 
-While it is shown, `shot <id> "..."` puts it in the screenshot, and the first line of `look` says
-`Tooltip shown: "..."`. For a tooltip whose text changes when the button is clicked: `hover`, then
-`click`, then read the first line of the answer.
+- "The browser shows its own tooltip from the title" is the old kind of tooltip (the `title` of the
+  element). It works; it is just not the app's styled tooltip.
+- While a styled tooltip is shown, `shot <id> "..."` puts it in the screenshot.
+- A tooltip whose text changes when the button is clicked: `hover` it, then `click` it. The answer
+  of the click has a line `Tooltip during the click: "..." → "..."` when the text changed.
 
 The main navigation links are: Dashboard, Containers, Pods, Images, Volumes, Networks, Secrets,
 Kubernetes, Extensions, Accounts, Settings.
 
 ## Steps
 
-1. Read "What to verify" and the pull request text at the end of this file. List the claims to check
-   (if you wrote a plan, it is in `rvp/plan.md`: follow it).
+1. Read "What to verify" at the end of this file. **It alone decides what you check.** The pull
+   request text below it explains the change; check a claim from that text only if "What to
+   verify" asks for it, or asks to verify the whole pull request. Usually this is one to three
+   claims. If you wrote a plan, it is in `rvp/plan.md`.
 2. For each claim: go to the place the claim names. If it names a page, a tab or a dialog, open
    that page, that tab or that dialog first, and check on the first line of `look` that it is the
    open one. Something that looks similar on another tab proves nothing. Then decide from what is printed.
@@ -81,7 +90,10 @@ Kubernetes, Extensions, Accounts, Settings.
    that decides it: `node rvp/pd.mjs pass <id> "<claim>" "<reason>"`. One more screenshot is taken at
    that moment, so record the verdict while the window shows the evidence. Leave the id out only
    when no element shows it (for example a value you got from `eval`).
-5. When every claim has a verdict, write `rvp/notes.md` (three to ten lines: what you checked and
+5. Work on one claim at a time. Give its verdict as soon as you have seen what decides it, before
+   you start the next claim, and never go back to a claim that has a verdict. If two different
+   attempts did not let you see it, record `skip` with what you tried and go on.
+6. When every claim has a verdict, write `rvp/notes.md` (three to ten lines: what you checked and
    what you found) and stop.
 
 ## Rules

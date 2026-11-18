@@ -19,10 +19,13 @@ const checkout = resolve(import.meta.dirname, '..');
 const out = process.env.RVP_OUT ?? join(import.meta.dirname, 'out');
 
 const HELP = `commands:
-  look [text]            print what the window contains; with text, only the lines around it
-  click <id>             click the element with that id (ids look like e12 and come from look)
-  hover <id>             put the mouse on the element and print its tooltip
-  fill <id> <text>       type text into a field
+  look                   print what can be used or read in the window
+  look <text>            print the row or section that contains a text
+  look <id>              print one element and everything inside it
+  look all               print the whole window, with every wrapper
+  click <name or id>     click something: click "Images", or click e12 (ids come from look)
+  hover <name or id>     put the mouse on it and print its tooltip; on a row, the tooltips of its buttons
+  fill <name or id> <text>   type text into a field
   press <key>            press a key, for example Enter or Escape
   eval <javascript>      run an expression in the page and print its value
   eval <id> <function>   run a function on one element: eval e12 "el => el.getAttribute('title')"
@@ -61,6 +64,7 @@ async function serve(extensions) {
   const checks = [];
   let app, page, recorder, folders = [], session = 0, shots = 0, pending = [];
   let refused; // the last verdict that was sent back to the model
+  let sinceVerdict = 0; // commands since the last verdict: a small model can go in circles for an hour
   let baseApp, basePage, snapshot = ''; // the app without the pull request, and the last tree of the PR app
   const size = { width: 1280, height: 800 };
   // every screenshot is taken once per theme: NN-name.png (light) and NN-name.dark.png
@@ -209,10 +213,11 @@ async function serve(extensions) {
   const told = (name, args) => {
     const [targets, rest] = ids([...args]);
     const on = targets.length ? targets.map(what).join(', ') : '';
-    if (name === 'click') return `click ${on || 'an element'}`;
-    if (name === 'hover') return `hover ${on || 'an element'}`;
+    // without an id the element was named: click "Images"
+    if (name === 'click') return `click ${on || `"${args.join(' ')}"`}`;
+    if (name === 'hover') return `hover ${on || `"${args.join(' ')}"`}`;
     if (name === 'eval' && on) return `run on ${on}: ${rest.join(' ').slice(0, 120)}`;
-    if (name === 'fill') return `type "${rest.join(' ')}" into ${on || 'an element'}`;
+    if (name === 'fill') return on ? `type "${rest.join(' ')}" into ${on}` : `type "${args.slice(1).join(' ')}" into "${args[0]}"`;
     if (name === 'press') return `press ${args[0]}`;
     if (name === 'eval') return `run in the page: ${args.join(' ').slice(0, 120)}`;
     if (name === 'shot') return `screenshot${on ? ` of ${on}` : ''}: ${readable(rest.join(' '))}`;
@@ -252,7 +257,7 @@ async function serve(extensions) {
     snapshot = await page.ariaSnapshot({ mode: 'ai' });
     return snapshot
       .split('\n')
-      .filter(line => !/^\s*- generic \[ref=\w+\]:?$/.test(line) && !/^\s*- \/url:/.test(line) && !/^\s*- img \[ref=\w+\]$/.test(line))
+      .filter(line => !/^\s*- \/url:/.test(line)) // every wrapper is kept: the nesting is read from the indentation
       .map(line => line.replace(' [cursor=pointer]', '').replace(/\[ref=(\w+)\]/, '[id=$1]'))
       .join('\n');
   }
@@ -280,23 +285,98 @@ async function serve(extensions) {
     return { tabs, tips, line };
   }
 
-  async function look(text, limit = 7000) {
-    return `${(await where()).line}\n${await window(text, limit)}`;
+  // --- what the model reads. It is read slowly (about 10 tokens per second on a CPU runner): every line counts. ---
+  const ACT = /^(button|link|tab|textbox|searchbox|checkbox|switch|radio|combobox|menuitem|menuitemcheckbox|option|slider)$/;
+  const BLOCK = /^(row|listitem|region|dialog|alertdialog|article|menu|toolbar|group|navigation|tablist|form)$/;
+  const HINT = 'Use: look "<text>" or look <id> to see one part.';
+  const indent = line => line.search(/\S/);
+  const parse = line => {
+    const [, role, , name] = /^\s*- (\w+)( "((?:[^"\\]|\\.)*)")?/.exec(line) ?? [];
+    const rest = line.replace(/^\s*- \w+( "(?:[^"\\]|\\.)*")?/, '');
+    return { role, name: name?.replace(/\\(.)/g, '$1'), id: /\[id=(\w+)\]/.exec(rest)?.[1], text: /:\s(.+)$/.exec(rest)?.[1] };
+  };
+  /** Only what a person can use or read: the lines with a name or a text, without pictures, indented by what is kept. */
+  const compact = lines => {
+    const kept = [], open = [];
+    let label = -1; // inside a button or a link there are only the pieces of its name
+    for (const line of lines) {
+      if (label >= 0 && indent(line) > label) continue;
+      label = -1;
+      const { role, name, text } = parse(line);
+      if (!role || role === 'img' || role === 'separator' || !(name || text)) continue;
+      while (open.length && open.at(-1) >= indent(line)) open.pop();
+      kept.push('  '.repeat(open.length) + line.trim().replace(/:$/, m => (ACT.test(role) ? '' : m)));
+      open.push(indent(line));
+      if (ACT.test(role) && role !== 'textbox' && role !== 'combobox') label = indent(line);
+    }
+    return kept;
+  };
+  /** A line and everything inside it. */
+  const within = (lines, i) => {
+    let j = i + 1;
+    while (j < lines.length && indent(lines[j]) > indent(lines[i])) j++;
+    return lines.slice(i, j);
+  };
+  const cut = (lines, limit, hint) => {
+    const shown = [];
+    let size = 0;
+    for (const line of lines) {
+      if (size + line.length > limit) return [...shown, `... ${lines.length - shown.length} more lines. ${hint}`].join('\n');
+      shown.push(line);
+      size += line.length + 1;
+    }
+    return shown.join('\n');
+  };
+  /** The row, list item or section a line is in: -1 when there is none of a readable size. */
+  const blockOf = (lines, i) => {
+    let level = indent(lines[i]);
+    for (let j = i; j >= 0; j--) {
+      if (j !== i && indent(lines[j]) >= level) continue;
+      level = indent(lines[j]);
+      if (BLOCK.test(parse(lines[j]).role ?? '')) return within(lines, j).length > 60 ? -1 : j;
+    }
+    return -1;
+  };
+  const menus = lines => {
+    const found = lines.map(parse).filter(p => p.id && p.role === 'button' && /menu|more|kebab/i.test(p.name ?? '')).slice(0, 5);
+    return found.length ? ` It may be in a menu: ${found.map(p => `"${p.name}" (${p.id})`).join(', ')}.` : '';
+  };
+
+  async function look(what, limit = 2000, tries = 3) {
+    const lines = (await tree()).split('\n');
+    const first = (await where()).line;
+    if (!what) return `${first}\n${cut(compact(lines), limit, HINT)}`;
+    if (what === 'all') return `${first}\n${cut(lines.filter(line => !/^\s*- (generic|img) \[id=\w+\]:?$/.test(line)), 7000, HINT)}`;
+    if (ID.test(what)) {
+      const i = lines.findIndex(line => line.includes(`[id=${what}]`));
+      if (i < 0) throw new Error(`there is no element ${what} in the window now. Run look again.`);
+      return `${first}\n${cut(compact(within(lines, i)), 3000, HINT)}`;
+    }
+    const parts = new Map(); // first line of a part -> its lines
+    lines.forEach((line, i) => {
+      if (!line.toLowerCase().includes(what.toLowerCase())) return;
+      const block = blockOf(lines, i);
+      if (block >= 0) parts.set(block, within(lines, block));
+      else if (![...parts.keys()].some(start => start <= i && i < start + parts.get(start).length)) parts.set(Math.max(0, i - 3), lines.slice(Math.max(0, i - 3), i + 7));
+    });
+    if (!parts.size && tries > 1) return (await page.waitForTimeout(1000), look(what, limit, tries - 1)); // it may still be loading
+    if (!parts.size) return `${first}\n"${what}" is not in the window.${menus(lines)}`;
+    return `${first}\n${cut([...parts.values()].flatMap(part => compact(part)), 3000, HINT)}`;
   }
 
-  async function window(text, limit) {
-    const lines = (await tree()).split('\n');
-    if (text) {
-      const keep = new Set();
-      lines.forEach((line, i) => {
-        if (line.toLowerCase().includes(text.toLowerCase())) for (let j = i - 3; j <= i + 6; j++) keep.add(j);
-      });
-      const found = lines.filter((_, i) => keep.has(i)).join('\n');
-      return found ? found.slice(0, limit) : `"${text}" is not in the window.`;
-    }
-    const all = lines.join('\n');
-    return all.length > limit ? `${all.slice(0, limit)}\n... cut. Use: look <text> to see the part you need.` : all;
-  }
+  /** What appeared and what went away between two views of the window. Ids are left out: the same line keeps the same words. */
+  const key = line => line.trim().replace(/ \[(id=\w+|active)\]/g, ''); // [active] is only where the keyboard focus is
+  const changes = (before, now) => {
+    const left = new Map();
+    for (const line of before) left.set(key(line), (left.get(key(line)) ?? 0) + 1);
+    const appeared = []; // positions in `now`
+    now.forEach((line, i) => {
+      if (left.get(key(line))) left.set(key(line), left.get(key(line)) - 1);
+      else appeared.push(i);
+    });
+    return { appeared, gone: [...left].flatMap(([line, times]) => Array(times).fill(line)) };
+  };
+  const state = async () => compact((await tree()).split('\n'));
 
   /** Leading element ids of a command: `shot e12 e15 the two tabs` -> [['e12', 'e15'], ['the two tabs']] */
   const ids = args => {
@@ -325,8 +405,8 @@ async function serve(extensions) {
     const stem = `media/${String(++shots).padStart(2, '0')}-${slug(name)}`;
     const marked = [], baseMarked = [], missing = [], notBefore = [];
     for (const id of outlined) {
-      const locator = page.locator(`aria-ref=${id}`);
-      if (!(await locator.count())) { missing.push(id); continue; }
+      const locator = await element(id).catch(() => undefined);
+      if (!locator) { missing.push(id); continue; }
       await locator.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {});
       await outline(locator);
       marked.push(locator);
@@ -347,59 +427,182 @@ async function serve(extensions) {
   }
 
   const element = async id => {
-    if (!ID.test(id ?? "")) throw new Error(`"${id}" is not an element id. Run look and use an id such as e12.`);
+    if (!ID.test(id ?? '')) throw new Error(`"${id}" is not an element id. Run look and use an id such as e12.`);
+    // Lists redraw their rows all the time and a redrawn element loses its id. So the element is found
+    // again by what the tree said about it (role, name, which one of them), and by its id only as a fallback.
+    const lines = snapshot.split('\n');
+    const i = lines.findIndex(line => line.includes(`[ref=${id}]`));
+    const { role, name } = i < 0 ? {} : parse(lines[i]);
+    if (name && role !== 'generic') {
+      const earlier = lines.slice(0, i).filter(line => parse(line).role === role && parse(line).name === name).length;
+      const again = page.getByRole(role, { name, exact: true }).nth(earlier);
+      if (await again.count().catch(() => 0)) return again;
+    }
     const locator = page.locator(`aria-ref=${id}`);
-    if (!(await locator.count())) throw new Error(`there is no element ${id} in the window now. Ids change after every action: run look again.`);
+    if (!(await locator.count())) throw new Error(`there is no element ${id} in the window now. Run look again.`);
     return locator;
   };
-  const after = async what => {
-    await page.waitForTimeout(700);
-    return `${what}\nThe window now contains (ids have changed):\n${await look(undefined, 4000)}`;
+  /** The element a command names: an id from look, or the visible name of something in the window. */
+  async function target(words) {
+    const given = words.join(' ').trim().replace(/^"(.*)"$/, '$1');
+    if (ID.test(given)) return { id: given, locator: await element(given) };
+    if (!given) throw new Error('say what: a name such as "Images", or an id such as e12.');
+    let lines, all;
+    const read = async () => {
+      lines = (await tree()).split('\n');
+      all = lines.map((line, i) => ({ ...parse(line), i })).filter(p => p.id && p.name);
+    };
+    const named = (name, role) => {
+      const wanted = name.toLowerCase().replace(/^"(.*)"$/, '$1');
+      const exact = all.filter(p => p.name.toLowerCase() === wanted && (!role || p.role === role));
+      return exact.length ? exact : all.filter(p => p.name.toLowerCase().includes(wanted) && (!role || p.role === role));
+    };
+    const [, role, rest] = /^(\w+) (.+)$/.exec(given) ?? []; // click link "Extensions"
+    let found = [];
+    // a list that is still loading: look again for a few seconds before saying it is not there
+    for (let tries = 0; tries < 4 && !found.length; tries++) {
+      if (tries) await page.waitForTimeout(1000);
+      await read();
+      found = named(given);
+      if (!found.length && rest) found = named(rest, role);
+    }
+    if (found.some(p => ACT.test(p.role))) found = found.filter(p => ACT.test(p.role));
+    if (!found.length) throw new Error(`nothing is named "${given}" in the window.${menus(lines)} Run look to see what is there.`);
+    if (found.length > 1) {
+      const place = i => {
+        const block = blockOf(lines, i);
+        const { role, name } = block >= 0 && block !== i ? parse(lines[block]) : {};
+        return name ? ` in ${role} "${name.slice(0, 60)}"` : '';
+      };
+      throw new Error(`${found.length} elements are named "${given}". Use the id of the one you mean:\n${found.slice(0, 8).map(p => `  ${p.id}  ${p.role} "${p.name}"${place(p.i)}`).join('\n')}`);
+    }
+    return { id: found[0].id, locator: await element(found[0].id) };
+  }
+  /** The answer to an action: where the app is now, and only what changed in the window. */
+  const after = async (done, before) => {
+    // a page fills in over a few seconds (lists load): wait until two views in a row say the same
+    let now = await state();
+    for (let tries = 0; tries < 8; tries++) {
+      await page.waitForTimeout(500);
+      const next = await state();
+      const same = next.length === now.length && next.every((line, i) => key(line) === key(now[i]));
+      now = next;
+      if (same) break;
+    }
+    const first = (await where()).line;
+    const { appeared, gone } = changes(before, now);
+    if (!appeared.length && !gone.length) return `${done}\n${first}\nNothing changed in the window.`;
+    // the new lines, each under what it is in (a row, a dialog, a page), so that they can be placed
+    const shown = new Set(appeared);
+    for (const i of appeared) for (let j = i - 1, level = indent(now[i]); j >= 0 && level > 0; j--) if (indent(now[j]) < level) (shown.add(j), (level = indent(now[j])));
+    return (
+      `${done}\n${first}` +
+      (appeared.length ? `\nAppeared:\n${cut([...shown].sort((a, b) => a - b).map(i => now[i]), 2000, HINT)}` : '') +
+      (gone.length ? `\nGone:\n${gone.slice(0, 3).map(line => `  ${line}`).join('\n')}${gone.length > 3 ? `\n  ... and ${gone.length - 3} more lines` : ''}` : '')
+    );
+  };
+  const hoverOne = async locator => {
+    await locator.hover({ timeout: 10_000 });
+    await page.waitForTimeout(900); // tooltips appear after a delay
+    return locator.evaluate(el => {
+      const box = el.getBoundingClientRect();
+      const tip = [...document.querySelectorAll('[role="tooltip"]')].find(t => t.getClientRects().length && t.textContent.trim());
+      const at = tip?.getBoundingClientRect();
+      return {
+        title: el.getAttribute('title'),
+        disabled: el.disabled === true || el.getAttribute('aria-disabled') === 'true',
+        menu: el.hasAttribute('aria-haspopup'),
+        tip: tip?.textContent.trim(),
+        // where the tooltip is, from the two rectangles
+        side: !at ? '' : at.bottom <= box.top + 2 ? 'above' : at.top >= box.bottom - 2 ? 'below' : at.right <= box.left + 2 ? 'on the left of' : 'on the right of',
+      };
+    });
+  };
+  /** One sentence about the tooltip of a hovered element. A `title` is the browser's own tooltip: it is never in the window tree. */
+  const tooltipOf = (seen, role) =>
+    seen.tip
+      ? `styled tooltip, shown ${seen.side} the ${role}: "${seen.tip}"`
+      : seen.title
+        ? `no styled tooltip. The browser shows its own tooltip from the title: "${seen.title}"`
+        : 'no tooltip: no styled one, and no title';
+  /** Records what the tooltip says while an action runs: a text that lasts a moment is over before the next command. */
+  const watchTooltip = () =>
+    page.evaluate(() => {
+      const seen = [];
+      const read = () => [...document.querySelectorAll('[role="tooltip"]')].filter(t => t.getClientRects().length && t.textContent.trim()).map(t => `"${t.textContent.trim()}"`).join(', ') || 'gone';
+      const timer = setInterval(() => seen.at(-1) !== read() && seen.push(read()), 50);
+      globalThis.__rvpTooltip = () => (clearInterval(timer), seen);
+    });
+  const watchedTooltip = async () => {
+    const seen = await page.evaluate(() => globalThis.__rvpTooltip?.() ?? []).catch(() => []);
+    return seen.length > 1 ? `Tooltip during the click: ${seen.join(' → ')}` : '';
   };
 
   const commands = {
-    look: text => look(text),
-    click: async id => {
-      await (await element(id)).click({ timeout: 10_000 });
-      const found = describe(id);
+    // `look cell e59`: the id is what was meant
+    look: (...words) => look(words.find(word => ID.test(word)) ?? (words.join(' ') || undefined)),
+    click: async (...words) => {
+      const { id, locator } = await target(words);
+      const [label, found, before] = [what(id), describe(id), await state()];
+      await watchTooltip();
+      await locator.click({ timeout: 10_000 });
       // links and tabs only show another view; a button is repeated unless its name says it changes something
       const harmless = found && (found.role !== 'button' || !CHANGES.test(found.name));
       await follow(harmless ? async () => (await twin(id))?.click({ timeout: 5000 }) : undefined);
-      return after(`clicked ${id}.`);
+      const answer = await after(`clicked ${label}.`, before);
+      return [answer, await watchedTooltip()].filter(Boolean).join('\n');
     },
-    fill: async (id, ...text) => {
-      await (await element(id)).fill(text.join(' '), { timeout: 10_000 });
+    hover: async (...words) => {
+      const { id, locator } = await target(words);
+      const label = what(id);
+      const lines = (await tree()).split('\n');
+      const i = lines.findIndex(line => line.includes(`[id=${id}]`));
+      // on a row, a cell or a toolbar: every button in it, one line each
+      const inside = i < 0 || ACT.test(parse(lines[i]).role ?? '') ? [] : within(lines, i).slice(1).map(parse).filter(p => p.id && /^(button|link)$/.test(p.role)).slice(0, 12);
+      if (inside.length) {
+        const rows = [];
+        for (const p of inside) {
+          const seen = await element(p.id).then(hoverOne).catch(() => undefined);
+          rows.push(`  ${p.role} "${p.name ?? ''}" [id=${p.id}]${seen?.disabled ? ' (disabled)' : ''}${seen?.menu ? ' (opens a menu)' : ''}: ${seen ? tooltipOf(seen, p.role) : 'could not be hovered'}`);
+        }
+        return `hovering ${label}: ${inside.length} buttons inside\n${rows.join('\n')}`;
+      }
+      const seen = await hoverOne(locator);
+      await follow(async () => (await twin(id))?.hover({ timeout: 5000 }));
+      return `hovering ${label}${seen.disabled ? ' (disabled)' : ''}\n  ${tooltipOf(seen, describe(id)?.role ?? 'element')}`;
+    },
+    fill: async (first, ...text) => {
+      const { id, locator } = await target([first]);
+      const [label, before] = [what(id), await state()];
+      await locator.fill(text.join(' '), { timeout: 10_000 });
       await follow(async () => (await twin(id))?.fill(text.join(' '), { timeout: 5000 }));
-      return after(`filled ${id}.`);
+      return after(`filled ${label}.`, before);
     },
     press: async key => {
+      const before = await state();
       await page.keyboard.press(key);
       await follow(key === 'Enter' ? undefined : () => basePage.keyboard.press(key)); // Enter can submit a form
-      return after(`pressed ${key}.`);
-    },
-    hover: async id => {
-      const locator = await element(id);
-      await locator.hover({ timeout: 10_000 });
-      await follow(async () => (await twin(id))?.hover({ timeout: 5000 }));
-      await page.waitForTimeout(900); // tooltips appear after a delay
-      const about = await locator.evaluate(el => ({ label: el.getAttribute('aria-label'), title: el.getAttribute('title'), disabled: el.disabled === true || el.getAttribute('aria-disabled') === 'true' }));
-      const { tips } = await where();
-      return (
-        `hovering ${what(id)}\n  label: ${about.label ?? '(none)'}    title: ${about.title ?? '(none)'}    disabled: ${about.disabled ? 'yes' : 'no'}\n` +
-        (tips.length ? `  tooltip shown: ${tips.map(t => `"${t}"`).join(', ')}` : '  no tooltip appeared')
-      );
+      return after(`pressed ${key}.`, before);
     },
     eval: async (...args) => {
-      const [targets, js] = ids([...args]);
+      let [targets, js] = ids([...args]);
       const code = js.join(' ');
       const print = value => JSON.stringify(value)?.slice(0, 2000) ?? 'undefined';
+      const known = id => snapshot.includes(`[ref=${id}]`);
+      const refuse = id => new Error(`${id} is not an id in the page: ids exist only for these commands. Use: look ${id} (what is inside it), hover ${id} (its tooltip), or eval ${id} "el => el.getAttribute('title')"`);
+      // `e561 => ...`: a function on that element, as small models write it
+      const [arrow, param] = /^\s*((?:f\d+)?e\d+)\s*=>/.exec(code) ?? [];
+      if (!targets.length && param && known(param)) {
+        if (new RegExp(`['"#=\\[]\\s*${param}\\b`).test(code.slice(arrow.length))) throw refuse(param);
+        targets = [param];
+      }
       if (targets.length) {
         // the element is handed over through the page: the function then runs like any other expression
         await (await element(targets[0])).evaluate(el => void (globalThis.__rvpElement = el));
         return print(await page.evaluate(`(${code})(globalThis.__rvpElement)`));
       }
-      const [, id] = /(?:#|id\s*=\s*["']?)((?:f\d+)?e\d+)\b/.exec(code) ?? [];
-      if (id) throw new Error(`${id} is not an id in the page: ids exist only for these commands. Use: hover ${id}, or eval ${id} "el => el.getAttribute('title')"`);
+      const used = (code.match(/\b(?:f\d+)?e\d+\b/g) ?? []).find(known);
+      if (used) throw refuse(used);
       return print(await page.evaluate(code));
     },
     shot: async (...args) => {
@@ -433,6 +636,7 @@ async function serve(extensions) {
         );
       }
       const note = status === 'skipped' ? '' : (await shot(readable(claim), outlined))[1];
+      sinceVerdict = -1; // this command is counted right after
       checks.push({ claim: readable(claim), status, reason: readable(reason.join(' ')), screenshots: pending });
       pending = [];
       writeFileSync(join(out, 'checks.json'), JSON.stringify(checks, null, 2));
@@ -464,11 +668,13 @@ async function serve(extensions) {
           ok = false;
           text = `error: ${String(error.message ?? error).split('\n').slice(0, 6).join('\n')}`;
         }
+        if (++sinceVerdict >= 12 && name !== 'stop') text += `\n${sinceVerdict} commands since the last verdict. Record pass, fail or skip for the claim you are on, then go to the next one.`;
         appendFileSync(join(out, 'actions.log'), `$ ${[name, ...rest].join(' ')}\n${text.slice(0, 600)}\n\n`);
         // one line per action, for whoever watches the run
         const lines = text.split('\n');
-        const shown = [...new Set([lines[0], lines.find(line => line.startsWith('You are on'))])].filter(Boolean).join(' ');
-        appendFileSync(join(out, 'progress.log'), `${new Date().toISOString().slice(11, 19)} ${(step ?? [name, ...rest].join(' ')).slice(0, 160)} → ${shown.replace(/^(clicked|filled) \S+ ?/, '').slice(0, 200)}\n`);
+        const here = lines.find(line => line.startsWith('You are on'));
+        const shown = here && /^(clicked|filled|pressed) /.test(lines[0]) ? here : [...new Set([lines[0], here])].filter(Boolean).join(' ');
+        appendFileSync(join(out, 'progress.log'), `${new Date().toISOString().slice(11, 19)} ${(step ?? [name, ...rest].join(' ')).slice(0, 160)} → ${shown.slice(0, 200)}\n`);
         // what the comment shows: actions only, in plain words
         if (step) appendFileSync(join(out, 'steps.log'), `${step.replace(/\s+/g, ' ').slice(0, 300)}${ok ? '' : ' (did not work)'}\n`);
         response.writeHead(ok ? 200 : 400).end(text);

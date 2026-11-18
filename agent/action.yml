@@ -278,7 +278,7 @@ runs:
         node rvp/follow.mjs "$RVP_OUT/pi-session" | tee -a "$RVP_OUT/agent.log" &
         # it can only read and write files here: the app is not touched before the plan is shown
         "$RVP_PI" -p --model "local/$MODEL" --tools read,write -nc -ns -ne -np --offline --session-dir "$RVP_OUT/pi-session" \
-          "Read the file $here/rvp/TASK.md. Do not start the task yet. Write the file $here/rvp/plan.md: one line per claim you will check, and for each claim how you will check it (the page or tab you will open, the command you will run). Then stop." \
+          "Read the file $here/rvp/TASK.md. Do not start the task yet. Write the file $here/rvp/plan.md: one line per claim you will check, and for each claim how you will check it (the page or tab you will open, the command you will run). Only the claims that the section 'What to verify' asks for: the pull request text is there to explain them, not to add more. Then stop." \
           > /dev/null 2>> "$RVP_OUT/agent.log" &
         agent=$!
         ( sleep 600; kill "$agent" 2> /dev/null ) &
