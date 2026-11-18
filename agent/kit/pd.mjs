@@ -21,9 +21,11 @@ const out = process.env.RVP_OUT ?? join(import.meta.dirname, 'out');
 const HELP = `commands:
   look [text]            print what the window contains; with text, only the lines around it
   click <id>             click the element with that id (ids look like e12 and come from look)
+  hover <id>             put the mouse on the element and print its tooltip
   fill <id> <text>       type text into a field
   press <key>            press a key, for example Enter or Escape
   eval <javascript>      run an expression in the page and print its value
+  eval <id> <function>   run a function on one element: eval e12 "el => el.getAttribute('title')"
   shot [id...] <name>    save a screenshot as evidence; elements with these ids are outlined in red
   pass [id...] <claim> <reason>  record that a claim is verified (takes a screenshot, ids outlined)
   fail [id...] <claim> <reason>  record that the app does not do what is claimed (same)
@@ -208,6 +210,8 @@ async function serve(extensions) {
     const [targets, rest] = ids([...args]);
     const on = targets.length ? targets.map(what).join(', ') : '';
     if (name === 'click') return `click ${on || 'an element'}`;
+    if (name === 'hover') return `hover ${on || 'an element'}`;
+    if (name === 'eval' && on) return `run on ${on}: ${rest.join(' ').slice(0, 120)}`;
     if (name === 'fill') return `type "${rest.join(' ')}" into ${on || 'an element'}`;
     if (name === 'press') return `press ${args[0]}`;
     if (name === 'eval') return `run in the page: ${args.join(' ').slice(0, 120)}`;
@@ -260,15 +264,20 @@ async function serve(extensions) {
    */
   async function where() {
     const [last, settings] = JSON.parse(await route(page).catch(() => '[]'));
-    const tabs = await page
-      .evaluate(() =>
-        [...document.querySelectorAll('button[class*="--pd-button-tab-border"], a[class*="--pd-tab-text"]')]
+    const { tabs, tips } = await page
+      .evaluate(() => ({
+        tabs: [...document.querySelectorAll('button[class*="--pd-button-tab-border"], a[class*="--pd-tab-text"]')]
           .filter(el => el.offsetParent)
           .map(el => ({ name: (el.getAttribute('aria-label') ?? el.textContent).trim(), open: /--pd-button-tab-border-selected|--pd-tab-text-highlight/.test(el.className) })),
-      )
-      .catch(() => []);
-    const line = `You are on page ${settings ?? last ?? '/'}.` + (tabs.length ? ` Tabs here: ${tabs.map(t => (t.open ? `[${t.name}] (open)` : t.name)).join(', ')}.` : '');
-    return { tabs, line };
+        // a tooltip exists only while the mouse (or the focus) is on its element
+        tips: [...document.querySelectorAll('[role="tooltip"]')].filter(el => el.getClientRects().length && el.textContent.trim()).map(el => el.textContent.trim()),
+      }))
+      .catch(() => ({ tabs: [], tips: [] }));
+    const line =
+      `You are on page ${settings ?? last ?? '/'}.` +
+      (tabs.length ? ` Tabs here: ${tabs.map(t => (t.open ? `[${t.name}] (open)` : t.name)).join(', ')}.` : '') +
+      (tips.length ? ` Tooltip shown: ${tips.map(t => `"${t}"`).join(', ')}.` : '');
+    return { tabs, tips, line };
   }
 
   async function look(text, limit = 7000) {
@@ -368,7 +377,31 @@ async function serve(extensions) {
       await follow(key === 'Enter' ? undefined : () => basePage.keyboard.press(key)); // Enter can submit a form
       return after(`pressed ${key}.`);
     },
-    eval: async (...js) => JSON.stringify(await page.evaluate(js.join(' ')))?.slice(0, 2000) ?? 'undefined',
+    hover: async id => {
+      const locator = await element(id);
+      await locator.hover({ timeout: 10_000 });
+      await follow(async () => (await twin(id))?.hover({ timeout: 5000 }));
+      await page.waitForTimeout(900); // tooltips appear after a delay
+      const about = await locator.evaluate(el => ({ label: el.getAttribute('aria-label'), title: el.getAttribute('title'), disabled: el.disabled === true || el.getAttribute('aria-disabled') === 'true' }));
+      const { tips } = await where();
+      return (
+        `hovering ${what(id)}\n  label: ${about.label ?? '(none)'}    title: ${about.title ?? '(none)'}    disabled: ${about.disabled ? 'yes' : 'no'}\n` +
+        (tips.length ? `  tooltip shown: ${tips.map(t => `"${t}"`).join(', ')}` : '  no tooltip appeared')
+      );
+    },
+    eval: async (...args) => {
+      const [targets, js] = ids([...args]);
+      const code = js.join(' ');
+      const print = value => JSON.stringify(value)?.slice(0, 2000) ?? 'undefined';
+      if (targets.length) {
+        // the element is handed over through the page: the function then runs like any other expression
+        await (await element(targets[0])).evaluate(el => void (globalThis.__rvpElement = el));
+        return print(await page.evaluate(`(${code})(globalThis.__rvpElement)`));
+      }
+      const [, id] = /(?:#|id\s*=\s*["']?)((?:f\d+)?e\d+)\b/.exec(code) ?? [];
+      if (id) throw new Error(`${id} is not an id in the page: ids exist only for these commands. Use: hover ${id}, or eval ${id} "el => el.getAttribute('title')"`);
+      return print(await page.evaluate(code));
+    },
     shot: async (...args) => {
       const [outlined, name] = ids(args);
       return `saved ${(await shot(readable(name.join(' ')) || 'screenshot', outlined)).join('')}`;
@@ -380,7 +413,7 @@ async function serve(extensions) {
     commands[verb] = async (...args) => {
       const command = JSON.stringify(args);
       const [outlined, [claim, ...reason]] = ids(args);
-      if (!claim || !reason.length) throw new Error(`usage: ${verb} [id...] "<claim>" "<reason>"`);
+      if (!claim) throw new Error(`usage: ${verb} [id...] "<claim>" "<reason>"`);
       // small models copy the usage line as it is
       if (/^<.*>$/.test(claim.trim()) || /^<.*>$/.test(reason.join(' ').trim()))
         throw new Error('not recorded: "<claim>" and "<reason>" are placeholders. Write the claim you checked and what you saw, in your own words.');

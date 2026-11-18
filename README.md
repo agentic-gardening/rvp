@@ -22,7 +22,7 @@ sentence says, not what you meant.
    - fetches the pull request, `pnpm install`, `pnpm build`;
    - starts the built app and keeps it running;
    - the model reads the instruction and the PR description, then drives the app with a small
-     command (`node rvp/pd.mjs look | click | fill | eval | shot`), takes screenshots of the elements
+     command (`node rvp/pd.mjs look | click | hover | fill | eval | shot`), takes screenshots of the elements
      that prove or disprove each claim, and records a verdict per claim
      (`pass | fail | skip`);
    - the app is closed and the result folder is uploaded as the `rvp-result` artifact.

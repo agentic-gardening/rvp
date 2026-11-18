@@ -10,9 +10,11 @@ it shows, and record for each claim whether it is true.
 node rvp/pd.mjs look                 print what the window contains
 node rvp/pd.mjs look "Kind"          print only the lines around a text (use this on big pages)
 node rvp/pd.mjs click e114           click the element with id e114
+node rvp/pd.mjs hover e114           put the mouse on the element: prints its label and its tooltip
 node rvp/pd.mjs fill e77 "some text" type into a field
 node rvp/pd.mjs press Enter          press a key
 node rvp/pd.mjs eval "document.title"   run JavaScript in the page and print the value
+node rvp/pd.mjs eval e114 "el => el.getAttribute('aria-describedby')"   run a function on one element
 node rvp/pd.mjs shot e461 "the Local extensions tab"   save a screenshot with element e461 outlined in red
 node rvp/pd.mjs pass e461 "<claim>" "<what you saw that proves it>"
 node rvp/pd.mjs fail e461 "<claim>" "<what you saw instead>"
@@ -41,11 +43,25 @@ You are on page /extensions. Tabs here: [Installed] (open), Catalog, Local exten
 - Tabs are buttons. Only the first line tells which tab is open. In the example the open tab is
   Installed: what you see is the Installed tab. To see the Local extensions tab, click it
   (`node rvp/pd.mjs click e421`) and check that the first line now says `[Local extensions] (open)`.
+- Ids exist only for these commands. The page does not know them: `document.querySelector('#e114')`
+  finds nothing. To read something about an element, use `hover e114` or `eval e114 "el => ..."`.
 - **Ids change after every click, fill or press.** The command prints the new window: take ids from
   the newest output only.
 - You cannot see pictures. Everything you know about the app comes from `look` and `eval`.
 - Use `eval` for things the tree does not say, such as a scrollbar:
   `node rvp/pd.mjs eval "(() => { const el = document.querySelector('[aria-label=\"content\"]'); return el.scrollHeight > el.clientHeight })()"`
+
+Tooltips: a tooltip exists only while the mouse is on the element. `hover <id>` prints it:
+
+```
+hovering button "Save Image"
+  label: Save Image    title: (none)    disabled: no
+  tooltip shown: "Save image to a local directory"
+```
+
+While it is shown, `shot <id> "..."` puts it in the screenshot, and the first line of `look` says
+`Tooltip shown: "..."`. For a tooltip whose text changes when the button is clicked: `hover`, then
+`click`, then read the first line of the answer.
 
 The main navigation links are: Dashboard, Containers, Pods, Images, Volumes, Networks, Secrets,
 Kubernetes, Extensions, Accounts, Settings.
@@ -77,6 +93,19 @@ Kubernetes, Extensions, Accounts, Settings.
 - If you tried and cannot tell, use `skip`. A wrong `pass` is worse than a `skip`.
 - Write files only inside `rvp/`. Never change another file of the repository.
 - No `git commit`, no `git push`, no GitHub calls. Someone else publishes your result.
+
+## Preparing what a claim needs
+
+Some claims need something to exist first: an image, a container using an image, a volume. You
+may create it with `podman` commands, then `look` again (the app shows it after a few seconds):
+
+```
+podman pull quay.io/podman/hello                      an image
+podman run -d --name rvp-test quay.io/podman/hello    a container, so that image is "used"
+podman build -t rvp-test-image <folder>               an image from a Containerfile you wrote outside this repository
+```
+
+Say in the reason of your verdict what you created.
 
 ## Extensions
 

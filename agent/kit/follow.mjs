@@ -45,4 +45,4 @@ function poll(print) {
 }
 
 poll(flag !== '--new');
-setInterval(() => poll(true), 1000);
+setInterval(() => poll(true), 200);
