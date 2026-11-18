@@ -279,7 +279,8 @@ async function serve(extensions) {
       }))
       .catch(() => ({ tabs: [], tips: [] }));
     const line =
-      `You are on page ${settings ?? last ?? '/'}.` +
+      // long pieces of an address are ids of an image or a container: their start is enough
+      `You are on page ${(settings ?? last ?? '/').replace(/[^/]{25,}/g, piece => `${piece.slice(0, 12)}…`)}.` +
       (tabs.length ? ` Tabs here: ${tabs.map(t => (t.open ? `[${t.name}] (open)` : t.name)).join(', ')}.` : '') +
       (tips.length ? ` Tooltip shown: ${tips.map(t => `"${t}"`).join(', ')}.` : '');
     return { tabs, tips, line };
@@ -295,20 +296,63 @@ async function serve(extensions) {
     const rest = line.replace(/^\s*- \w+( "(?:[^"\\]|\\.)*")?/, '');
     return { role, name: name?.replace(/\\(.)/g, '$1'), id: /\[id=(\w+)\]/.exec(rest)?.[1], text: /:\s(.+)$/.exec(rest)?.[1] };
   };
-  /** Only what a person can use or read: the lines with a name or a text, without pictures, indented by what is kept. */
-  const compact = lines => {
-    const kept = [], open = [];
-    let label = -1; // inside a button or a link there are only the pieces of its name
+  const WRAP = /^(region|group|generic|navigation|rowgroup|list|table|main|banner|cell)$/;
+  /**
+   * Only what a person can use or read: the lines with a name or a text, without pictures, indented by
+   * what is kept. Wrappers around one thing are removed. `brief` (the default view, and what is
+   * compared after an action) also puts a table row and a navigation on one line and leaves the status bar out.
+   */
+  const compact = (lines, brief = false) => {
+    const root = { depth: -1, kids: [] };
+    const open = [root];
+    let skip = -1; // inside a button or a link there are only the pieces of its name
     for (const line of lines) {
-      if (label >= 0 && indent(line) > label) continue;
-      label = -1;
-      const { role, name, text } = parse(line);
-      if (!role || role === 'img' || role === 'separator' || !(name || text)) continue;
-      while (open.length && open.at(-1) >= indent(line)) open.pop();
-      kept.push('  '.repeat(open.length) + line.trim().replace(/:$/, m => (ACT.test(role) ? '' : m)));
-      open.push(indent(line));
-      if (ACT.test(role) && role !== 'textbox' && role !== 'combobox') label = indent(line);
+      if (skip >= 0 && indent(line) > skip) continue;
+      skip = -1;
+      const p = parse(line);
+      while (open.at(-1).depth >= indent(line)) open.pop(); // also for a line that is left out: what follows is not inside the previous one
+      if (!p.role || p.role === 'img' || p.role === 'separator' || !(p.name || p.text)) continue;
+      if (brief && p.role === 'contentinfo') { skip = indent(line); continue; }
+      const node = { ...p, depth: indent(line), line: line.trim(), kids: [] };
+      open.at(-1).kids.push(node);
+      open.push(node);
+      if (ACT.test(p.role) && p.role !== 'textbox' && p.role !== 'combobox') skip = indent(line);
     }
+    const tidy = node => {
+      node.kids = node.kids.flatMap(kid => {
+        tidy(kid);
+        const wrapper = WRAP.test(kid.role) && !kid.text;
+        if (wrapper && !kid.kids.length) return kid.role === 'cell' ? [kid] : []; // a cell with only a name is a value
+        return wrapper && kid.kids.length === 1 ? kid.kids : [kid];
+      });
+    };
+    tidy(root);
+    const leaves = node => (node.kids.length ? node.kids.flatMap(leaves) : [node]);
+    const said = node => `${node.text ?? node.name}${/\[disabled\]/.test(node.line) ? ' (disabled)' : ''}`;
+    const kept = [];
+    const print = (nodes, level) => {
+      const pad = '  '.repeat(level);
+      for (let i = 0; i < nodes.length; i++) {
+        const node = nodes[i];
+        const below = node.kids.flatMap(leaves);
+        if (brief && node.role === 'navigation' && below.length && below.every(leaf => leaf.role === 'link')) {
+          kept.push(`${pad}- navigation: ${below.map(said).join(', ')}`);
+        } else if (brief && node.role === 'row' && below.length) {
+          const buttons = below.filter(leaf => ACT.test(leaf.role)).map(said);
+          const texts = [...new Set(below.filter(leaf => !ACT.test(leaf.role)).map(said))];
+          kept.push(`${pad}${node.line.replace(/:$/, '')}: ${texts.join(', ')}${buttons.length ? `. Buttons: ${buttons.join(', ')}` : ''}`);
+        } else if (brief && node.role === 'columnheader') {
+          let j = i;
+          while (nodes[j + 1]?.role === 'columnheader') j++;
+          kept.push(`${pad}- columns: ${nodes.slice(i, j + 1).map(said).join(', ')}`);
+          i = j;
+        } else {
+          kept.push(pad + (node.kids.length ? node.line : node.line.replace(/:$/, '')));
+          print(node.kids, level + 1);
+        }
+      }
+    };
+    print(root.kids, 0);
     return kept;
   };
   /** A line and everything inside it. */
@@ -345,7 +389,7 @@ async function serve(extensions) {
   async function look(what, limit = 2000, tries = 3) {
     const lines = (await tree()).split('\n');
     const first = (await where()).line;
-    if (!what) return `${first}\n${cut(compact(lines), limit, HINT)}`;
+    if (!what) return `${first}\n${cut(compact(lines, true), limit, HINT)}`;
     if (what === 'all') return `${first}\n${cut(lines.filter(line => !/^\s*- (generic|img) \[id=\w+\]:?$/.test(line)), 7000, HINT)}`;
     if (ID.test(what)) {
       const i = lines.findIndex(line => line.includes(`[id=${what}]`));
@@ -376,7 +420,7 @@ async function serve(extensions) {
     });
     return { appeared, gone: [...left].flatMap(([line, times]) => Array(times).fill(line)) };
   };
-  const state = async () => compact((await tree()).split('\n'));
+  const state = async () => compact((await tree()).split('\n'), true);
 
   /** Leading element ids of a command: `shot e12 e15 the two tabs` -> [['e12', 'e15'], ['the two tabs']] */
   const ids = args => {
@@ -655,7 +699,10 @@ async function serve(extensions) {
         const [name, ...rest] = JSON.parse(body);
         const step = told(name, rest); // before the action: the ids are those of the tree the model read
         try {
-          if (!commands[name]) throw new Error(`unknown command "${name}".\n${HELP}`);
+          // going in circles: nothing but a verdict is accepted any more, and a skip is a fine verdict
+          if (sinceVerdict >= 25 && !['pass', 'fail', 'skip', 'stop', 'restart'].includes(name))
+            throw new Error(`${sinceVerdict} commands without a verdict: not run. Record pass, fail or skip for the claim you are on (skip "<claim>" "<what you tried>" if you could not see it). After that you can go on.`);
+          if (!commands[name]) throw new Error(`unknown command "${name}". The commands are: ${Object.keys(commands).filter(c => c !== 'stop').join(', ')}. Example: node rvp/pd.mjs click "Images"`);
           let reopened = '';
           if (page.isClosed() && name !== 'stop' && name !== 'restart') {
             // the window was closed (by a person, or the app crashed): open a fresh one rather than fail every command

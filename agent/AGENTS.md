@@ -31,26 +31,29 @@ The first line of every answer says where you are: the page, the tabs of that pa
 one, and the tooltip if one is shown. Then come lines `role "name" [id=...]`, sometimes with a text:
 
 ```
-You are on page /extensions. Tabs here: [Installed] (open), Catalog, Local extensions.
-- navigation "AppNavigation" [id=e27]:
-  - link "Extensions" [id=e114]
-- region "extensions" [id=e512]:
-  - button "Local extensions" [id=e421]
-  - region "podman-desktop.kind" [id=e442]:
-    - button "kind extension details" [id=e451]
-    - status "Extension status" [id=e455]: Installed
+You are on page /images.
+- navigation: Dashboard, Containers, Pods, Images, Volumes, Networks, Secrets, Kubernetes, Extensions, Accounts, Settings
+- region "images" [id=e404]:
+  - heading "images" [level=1] [id=e407]
+  - button "Pull" [id=e432]
+  - textbox "search images" [id=e452]
+  - table "image" [id=e457]:
+    - columns: Status, Name, Environment, Age, Size, Arch, Actions
+    - row "quay.io/podman/hello" [id=e669]: USED, podman, 2 years, 579.59 kB, arm64. Buttons: Run Image, Delete Image (disabled), kebab menu
 ```
 
+- A `row` is one line: its values, then its buttons. `look e669` shows the row in detail, with the
+  id of each button.
+- The status bar at the bottom of the window is left out: `look "Status Bar"` shows it.
 - Use the name: `node rvp/pd.mjs click "Local extensions"`. When several things have that name the
   answer lists them with their ids: then use the id, copied exactly (`e114` or `f1e114`).
 - After `click`, `fill` or `press` the answer shows only what changed: the lines that appeared,
   under what they are in, and the first lines that went away. "Nothing changed in the window"
   means your action had no visible effect.
-- Tabs are buttons. Only the first line tells which tab is open. In the example the open tab is
-  Installed. To see the Local extensions tab, click it and check that the first line now says
-  `[Local extensions] (open)`.
-- A list (images, containers...) shows one `row` per item. `look "<name of the item>"` prints that
-  row with its buttons. Actions that are not in the row are in its `kebab menu` button (click it:
+- Tabs are buttons. Only the first line tells which tab is open, for example
+  `Tabs here: [Installed] (open), Catalog, Local extensions.` To see the Local extensions tab,
+  click it and check that the first line now says `[Local extensions] (open)`.
+- Actions that are not in the row are in its `kebab menu` button (click it:
   the menu items appear) or on the details page of the item (click its name).
 - Ids exist only for these commands. The page does not know them: `document.querySelector('#e114')`
   finds nothing. To learn about an element use `look e114`, `hover e114` or `eval e114 "el => ..."`.
@@ -90,7 +93,7 @@ Kubernetes, Extensions, Accounts, Settings.
    that decides it: `node rvp/pd.mjs pass <id> "<claim>" "<reason>"`. One more screenshot is taken at
    that moment, so record the verdict while the window shows the evidence. Leave the id out only
    when no element shows it (for example a value you got from `eval`).
-5. Work on one claim at a time. Give its verdict as soon as you have seen what decides it, before
+5. Work on one claim at a time. After 25 commands without a verdict, only a verdict is accepted. Give its verdict as soon as you have seen what decides it, before
    you start the next claim, and never go back to a claim that has a verdict. If two different
    attempts did not let you see it, record `skip` with what you tried and go on.
 6. When every claim has a verdict, write `rvp/notes.md` (three to ten lines: what you checked and
