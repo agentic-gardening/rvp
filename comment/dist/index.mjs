@@ -78,7 +78,7 @@ var inline = (s, max = 300) => strip(s).replace(/\s+/g, " ").slice(0, max).repla
 var block = (s, max, lang = "") => `~~~~${lang}
 ${strip(s).slice(0, max).replace(/~~~/g, "~~ ~")}
 ~~~~`;
-function render(result, url, runUrl, actions) {
+function render(result, url, runUrl, actions, plan = "") {
   const out = [
     `## rvp: ${HEAD[result.outcome]}`,
     "",
@@ -92,6 +92,8 @@ function render(result, url, runUrl, actions) {
       out.push("", inline(c.reason, 600));
     out.push(...screenshots(c.screenshots, url));
   }
+  if (plan.trim())
+    out.push("", "<details><summary>What the agent planned</summary>", "", block(plan, 3000), "", "</details>");
   if (result.notes.trim())
     out.push("", "<details><summary>Agent notes</summary>", "", block(result.notes, 3000), "", "</details>");
   const steps = actions.split(`
@@ -125,9 +127,9 @@ function screenshots(files, url) {
   }
   return out;
 }
-var readActions = (dir) => {
+var readText = (dir, file) => {
   try {
-    return readFileSync2(join2(dir, "steps.log"), "utf8");
+    return readFileSync2(join2(dir, file), "utf8");
   } catch {
     return "";
   }
@@ -170,10 +172,11 @@ async function main() {
   const input = (name) => process.env[`INPUT_${name.toUpperCase()}`] ?? "";
   const dir = dry ? process.argv[3] : input("dir");
   const result = check(dir);
-  const actions = readActions(dir);
+  const actions = readText(dir, "steps.log");
+  const plan = readText(dir, "plan.md");
   if (dry) {
     const prefix = process.argv[4];
-    console.log(render(result, (media) => prefix ? prefix + basename(media) : media, "", actions));
+    console.log(render(result, (media) => prefix ? prefix + basename(media) : media, "", actions, plan));
     return;
   }
   const { GITHUB_REPOSITORY, GITHUB_SERVER_URL, GITHUB_RUN_ID } = process.env;
@@ -182,7 +185,7 @@ async function main() {
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !Number.isInteger(pr) || pr <= 0)
     throw new Error("bad repo or pr input");
   const urls = await uploadScreenshots(input("media_token"), GITHUB_REPOSITORY, dir, result.checks.flatMap((c) => c.screenshots), GITHUB_RUN_ID);
-  const body = render(result, (media) => urls.get(media), `${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}`, actions);
+  const body = render(result, (media) => urls.get(media), `${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}`, actions, plan);
   const comment = await api(input("token"), "POST", `/repos/${repo}/issues/${pr}/comments`, { body });
   console.log(`commented: ${comment.html_url}`);
 }

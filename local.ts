@@ -1,5 +1,5 @@
 // Run the steps of agent/action.yml on this machine (macOS or Linux), the way a runner would.
-//   bun run local <pr> "<instruction>" [model] [--before-after | --no-before-after] [--no-themes] [--gist]
+//   bun run local <pr> "<instruction>" [model] [--before-after | --no-before-after] [--no-themes] [--gist] [--repo=owner/name]
 // Needs gh (logged in), Node 24 and pnpm. Everything goes to .local/ ; rm -rf .local to start over.
 // The comment is written to .local/rvp-out/comment.md and never posted on the pull request.
 // --gist also publishes it, with its screenshots, as a secret gist on your own account.
@@ -13,18 +13,21 @@ const action: any = Bun.YAML.parse(readFileSync(join(root, 'agent/action.yml'), 
 const flags = process.argv.slice(2).filter(a => a.startsWith('--'));
 const [pr, instruction, model] = process.argv.slice(2).filter(a => !a.startsWith('--'));
 if (!pr || !instruction) {
-  console.error('usage: bun run local <pr> "<instruction>" [model] [--before-after | --no-before-after] [--no-themes] [--gist]');
+  console.error('usage: bun run local <pr> "<instruction>" [model] [--before-after | --no-before-after] [--no-themes] [--gist] [--repo=owner/name]');
   process.exit(2);
 }
 const inputs: Record<string, string> = Object.fromEntries(Object.entries<any>(action.inputs).map(([name, input]) => [name, String(input.default ?? '')]));
 // the token input stays empty: gh then uses your own login
 Object.assign(inputs, { pr, instruction, token: '', 'before-after': flags.includes('--before-after') ? 'true' : flags.includes('--no-before-after') ? 'false' : 'auto', themes: String(!flags.includes('--no-themes')) });
 if (model) inputs.model = model;
+const repo = flags.find(f => f.startsWith('--repo='))?.slice(7);
+if (repo) inputs.repo = repo;
+const builtAs = `${inputs.repo}#${pr}`; // what the builds in .local/ were made from
 const runnerOs = process.platform === 'darwin' ? 'macOS' : 'Linux';
 const marker = join(work, 'pd/.rvp-pr');
-const built = existsSync(marker) && readFileSync(marker, 'utf8') === pr;
+const built = existsSync(marker) && readFileSync(marker, 'utf8') === builtAs;
 const baseMarker = join(work, 'pd-base/.rvp-pr');
-const baseBuilt = existsSync(baseMarker) && readFileSync(baseMarker, 'utf8') === pr;
+const baseBuilt = existsSync(baseMarker) && readFileSync(baseMarker, 'utf8') === builtAs;
 
 // what a cache hit, or a machine that is already set up, would skip
 const skip: Record<string, boolean> = {
@@ -62,8 +65,8 @@ for (const step of action.runs.steps) {
     if (resolved) env[name] = resolved;
   }
   if (!bash(step.run, join(work, step['working-directory'] ?? ''), env)) failed ||= step.name;
-  else if (step.name === 'build Podman Desktop') writeFileSync(marker, pr);
-  else if (step.name === 'build the base') writeFileSync(baseMarker, pr);
+  else if (step.name === 'build Podman Desktop') writeFileSync(marker, builtAs);
+  else if (step.name === 'build the base') writeFileSync(baseMarker, builtAs);
 }
 
 bash(`pkill -f "${work}/rvp-tools/ollama" || true`, work, base);

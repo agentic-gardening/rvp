@@ -52,7 +52,8 @@ Kubernetes, Extensions, Accounts, Settings.
 
 ## Steps
 
-1. Read "What to verify" and the pull request text at the end of this file. List the claims to check.
+1. Read "What to verify" and the pull request text at the end of this file. List the claims to check
+   (if you wrote a plan, it is in `rvp/plan.md`: follow it).
 2. For each claim: go to the place the claim names. If it names a page, a tab or a dialog, open
    that page, that tab or that dialog first, and check on the first line of `look` that it is the
    open one. Something that looks similar on another tab proves nothing. Then decide from what is printed.

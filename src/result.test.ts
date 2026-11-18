@@ -67,9 +67,11 @@ test('untrusted text cannot mention, link or break out of a code block', () => {
     m => m,
     '',
     'click button "x"\n<img src=x> @all',
+    'open the page\n~~~~\n@all',
   );
   expect(body).toContain('@​all');
   expect(body).toContain('~~ ~~\n@all\n~~~~'); // notes stay inside their block
+  expect(body).toContain('What the agent planned</summary>\n\n~~~~\nopen the page\n~~ ~~\n@all\n~~~~'); // the plan too
   expect(body).toContain('1. click button "x"\n2. &lt;img src=x\\> @​all'); // actions are a list of plain lines
 });
 

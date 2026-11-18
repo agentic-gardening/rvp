@@ -29,7 +29,7 @@ export const inline = (s: string, max = 300): string =>
 export const block = (s: string, max: number, lang = ''): string =>
   `~~~~${lang}\n${strip(s).slice(0, max).replace(/~~~/g, '~~ ~')}\n~~~~`;
 
-export function render(result: Result, url: (media: string) => string, runUrl: string, actions: string): string {
+export function render(result: Result, url: (media: string) => string, runUrl: string, actions: string, plan = ''): string {
   const out: string[] = [
     `## rvp: ${HEAD[result.outcome]}`,
     '',
@@ -42,6 +42,7 @@ export function render(result: Result, url: (media: string) => string, runUrl: s
     if (c.reason) out.push('', inline(c.reason, 600));
     out.push(...screenshots(c.screenshots, url));
   }
+  if (plan.trim()) out.push('', '<details><summary>What the agent planned</summary>', '', block(plan, 3000), '', '</details>');
   if (result.notes.trim()) out.push('', '<details><summary>Agent notes</summary>', '', block(result.notes, 3000), '', '</details>');
   const steps = actions.split('\n').filter(line => line.trim()).slice(0, 80);
   if (steps.length) out.push('', '<details><summary>What the agent did</summary>', '', ...steps.map((step, i) => `${i + 1}. ${inline(step, 300)}`), '', '</details>');
@@ -86,9 +87,9 @@ export function screenshots(files: string[], url: (media: string) => string): st
   return out;
 }
 
-const readActions = (dir: string): string => {
+const readText = (dir: string, file: string): string => {
   try {
-    return readFileSync(join(dir, 'steps.log'), 'utf8'); // one line per action, written by the session tool
+    return readFileSync(join(dir, file), 'utf8');
   } catch {
     return '';
   }
@@ -134,10 +135,11 @@ async function main(): Promise<void> {
   const input = (name: string): string => process.env[`INPUT_${name.toUpperCase()}`] ?? '';
   const dir = dry ? process.argv[3] : input('dir');
   const result = check(dir);
-  const actions = readActions(dir);
+  const actions = readText(dir, 'steps.log'); // one line per action, written by the session tool
+  const plan = readText(dir, 'plan.md'); // written by the model before it starts
   if (dry) {
     const prefix = process.argv[4];
-    console.log(render(result, media => (prefix ? prefix + basename(media) : media), '', actions));
+    console.log(render(result, media => (prefix ? prefix + basename(media) : media), '', actions, plan));
     return;
   }
   const { GITHUB_REPOSITORY, GITHUB_SERVER_URL, GITHUB_RUN_ID } = process.env;
@@ -145,7 +147,7 @@ async function main(): Promise<void> {
   const pr = Number(input('pr'));
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !Number.isInteger(pr) || pr <= 0) throw new Error('bad repo or pr input');
   const urls = await uploadScreenshots(input('media_token'), GITHUB_REPOSITORY!, dir, result.checks.flatMap(c => c.screenshots), GITHUB_RUN_ID!);
-  const body = render(result, media => urls.get(media)!, `${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}`, actions);
+  const body = render(result, media => urls.get(media)!, `${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}`, actions, plan);
   // where to comment comes from the workflow inputs, never from result.json
   const comment = await api(input('token'), 'POST', `/repos/${repo}/issues/${pr}/comments`, { body });
   console.log(`commented: ${comment.html_url}`);

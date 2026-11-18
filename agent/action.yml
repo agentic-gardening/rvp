@@ -264,6 +264,43 @@ runs:
         cp rvp/TASK.md "$RVP_OUT/TASK.md"
         cat rvp/TASK.md
 
+    # Two steps, so that the plan is on the run page before the model touches the app.
+    - name: agent writes its plan
+      shell: bash
+      working-directory: pd
+      env:
+        MODEL: ${{ inputs.model }}
+        PI_TELEMETRY: '0'
+      run: |
+        export PI_CODING_AGENT_DIR="$RUNNER_TEMP/pi"
+        here=$(pwd -W 2> /dev/null || pwd)
+        # what the model thinks and says, as it happens
+        node rvp/follow.mjs "$RVP_OUT/pi-session" | tee -a "$RVP_OUT/agent.log" &
+        # it can only read and write files here: the app is not touched before the plan is shown
+        "$RVP_PI" -p --model "local/$MODEL" --tools read,write -nc -ns -ne -np --offline --session-dir "$RVP_OUT/pi-session" \
+          "Read the file $here/rvp/TASK.md. Do not start the task yet. Write the file $here/rvp/plan.md: one line per claim you will check, and for each claim how you will check it (the page or tab you will open, the command you will run). Then stop." \
+          > /dev/null 2>> "$RVP_OUT/agent.log" &
+        agent=$!
+        ( sleep 600; kill "$agent" 2> /dev/null ) &
+        watchdog=$!
+        wait "$agent" || echo "the model stopped with an error or took more than 10 minutes"
+        kill "$watchdog" 2> /dev/null || true
+        sleep 2
+        kill %1 2> /dev/null || true
+        # this time is taken from the model's budget
+        echo "RVP_PLAN_SECONDS=$SECONDS" >> "$GITHUB_ENV"
+
+    - name: plan of the agent
+      shell: bash
+      working-directory: pd
+      run: |
+        if [ ! -s rvp/plan.md ]; then echo "The model wrote no plan. It goes on with the task."; exit 0; fi
+        cp rvp/plan.md "$RVP_OUT/plan.md"
+        # shown as text, never rendered: the model wrote it after reading the pull request
+        { printf '<details open><summary>Plan of the agent</summary>\n\n~~~~markdown\n'; sed 's/~~~/~~ ~/g' rvp/plan.md | head -c 4000; printf '\n~~~~\n\n</details>\n\n'; } >> "$GITHUB_STEP_SUMMARY"
+        # no line of it may be read as a workflow command
+        sed 's/^/  /' rvp/plan.md | head -c 4000
+
     - name: agent
       shell: bash
       working-directory: pd
@@ -273,35 +310,31 @@ runs:
         PI_TELEMETRY: '0'
       run: |
         export PI_CODING_AGENT_DIR="$RUNNER_TEMP/pi"
-        # one line per action of the model, shown as it happens (the model thinks between two lines)
+        here=$(pwd -W 2> /dev/null || pwd)
+        # shown as they happen: one line per action on the app, and what the model thinks, says and runs besides
         touch "$RVP_OUT/progress.log"
         tail -n +1 -f "$RVP_OUT/progress.log" &
-        progress=$!
-        # the prompt is a file: no command-line length limit on Windows, and the model can read it again
+        node rvp/follow.mjs "$RVP_OUT/pi-session" --new | tee -a "$RVP_OUT/agent.log" &
         # the full path: a small model given "rvp/TASK.md" may look for it somewhere else
-        prompt="Read the file $(pwd -W 2> /dev/null || pwd)/rvp/TASK.md and carry out the task it describes. Run every command from this folder."
-        more=()
-        end=$((SECONDS + MINUTES * 60))
+        prompt="Now carry out the task described in $here/rvp/TASK.md (read it if you have not). Run every command from this folder."
+        end=$((SECONDS + MINUTES * 60 - ${RVP_PLAN_SECONDS:-0}))
         # a small model often ends its turn early: while no verdict is recorded, send it back to work
         for try in 1 2 3 4; do
           [ "$SECONDS" -lt "$end" ] || break
           echo "--- attempt $try" | tee -a "$RVP_OUT/agent.log"
-          # no context files, skills, extensions or templates: the prompt stays small, and the checkout cannot add to it
-          "$RVP_PI" -p --model "local/$MODEL" --tools read,bash,write -nc -ns -ne -np --offline --session-dir "$RVP_OUT/pi-session" "${more[@]}" "$prompt" >> "$RVP_OUT/agent.log" 2>&1 &
+          # -c: the conversation of the plan goes on. No context files, skills, extensions or templates:
+          # the prompt stays small, and the checkout cannot add to it
+          "$RVP_PI" -p -c --model "local/$MODEL" --tools read,bash,write -nc -ns -ne -np --offline --session-dir "$RVP_OUT/pi-session" "$prompt" > /dev/null 2>> "$RVP_OUT/agent.log" &
           agent=$!
           ( sleep $((end - SECONDS)); kill "$agent" 2> /dev/null ) &
           watchdog=$!
           wait "$agent" || echo "agent stopped with an error or ran out of time"
           kill "$watchdog" 2> /dev/null || true
           [ -f "$RVP_OUT/checks.json" ] && break
-          more=(-c)
-          prompt="You stopped before recording a verdict, so the task is not done. Run: node rvp/pd.mjs look. Then continue the task of rvp/TASK.md and record pass, fail or skip for each claim."
+          prompt="You stopped before recording a verdict, so the task is not done. Run: node rvp/pd.mjs look. Then continue the task of $here/rvp/TASK.md and record pass, fail or skip for each claim."
         done
-        sleep 1
-        kill "$progress" 2> /dev/null || true
-        echo "::group::what the model said at the end (the whole conversation is in pi-session/ of the result folder)"
-        tail -n 200 "$RVP_OUT/agent.log"
-        echo "::endgroup::"
+        sleep 2
+        kill %1 %2 2> /dev/null || true
 
     - name: stop and write the result
       if: always()

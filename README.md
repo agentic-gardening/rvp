@@ -44,7 +44,8 @@ steps.log       the same actions in plain words, with names instead of ids (show
 progress.log    one line per command (what the run page shows live)
 build.log       pnpm install and build output (build-base.log for the base), ollama-pull.log
 notes.md        what the model says it did
-agent.log       what the model said at the end of each attempt
+plan.md         the plan the model wrote before starting (its own step on the run page)
+agent.log       what the model thought, said and ran besides the app actions
 pi-session/     the whole conversation of the model (JSONL)
 ```
 
@@ -116,7 +117,7 @@ node comment/dist/index.mjs --dry-run <result folder>   # print the comment, no 
 To run the whole agent action on your machine (macOS or Linux; needs `gh` logged in, Node 24, pnpm):
 
 ```sh
-bun run local 1234 "verify that I can install 3 extensions" [model] [--before-after | --no-before-after] [--no-themes] [--gist]
+bun run local 1234 "verify that I can install 3 extensions" [model] [--before-after | --no-before-after] [--no-themes] [--gist] [--repo=owner/name]
 ```
 
 - The comment is written to `.local/rvp-out/comment.md`. It is never posted on the pull request.
