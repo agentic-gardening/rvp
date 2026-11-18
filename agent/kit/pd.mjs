@@ -65,6 +65,7 @@ async function serve(extensions) {
   let app, page, recorder, folders = [], session = 0, shots = 0, pending = [];
   let refused; // the last verdict that was sent back to the model
   const lastChange = new Map(); // action -> what it changed in the window the last time
+  let lost; // an answer nobody read: the model put a timeout on its command and was gone before the end
   let hovered; // the last button hovered alone: its tooltip is watched again after the next clicks
   let sinceVerdict = 0; // commands since the last verdict: a small model can go in circles for an hour
   let baseApp, basePage, snapshot = ''; // the app without the pull request, and the last tree of the PR app
@@ -343,9 +344,14 @@ async function serve(extensions) {
           kept.push(`${pad}- navigation: ${below.map(said).join(', ')}`);
         } else if (brief && node.role === 'row' && below.length) {
           // with their ids: several rows have the same buttons, so a name alone is not enough to use one
-          const buttons = below.filter(leaf => ACT.test(leaf.role)).map(leaf => `${leaf.text ?? leaf.name}${/ \[id=\w+\]/.exec(leaf.line)?.[0] ?? ''}${/\[disabled\]/.test(leaf.line) ? ' (disabled)' : ''}`);
+          // an open menu is said: its items look like more buttons of the row otherwise
+          const inside = (n, test) => n.kids.flatMap(kid => (test(kid) ? [kid] : inside(kid, test)));
+          const menu = new Set(inside(node, kid => kid.role === 'menu' || (kid.role !== 'button' && /menu items/i.test(kid.name ?? ''))).flatMap(leaves));
+          const label = leaf => `${leaf.text ?? leaf.name}${/ \[id=\w+\]/.exec(leaf.line)?.[0] ?? ''}${/\[disabled\]/.test(leaf.line) ? ' (disabled)' : ''}`;
+          const open = [...menu].filter(leaf => ACT.test(leaf.role)).map(label);
+          const buttons = below.filter(leaf => ACT.test(leaf.role) && !menu.has(leaf)).map(leaf => `${leaf.text ?? leaf.name}${/ \[id=\w+\]/.exec(leaf.line)?.[0] ?? ''}${/\[disabled\]/.test(leaf.line) ? ' (disabled)' : ''}`);
           const texts = [...new Set(below.filter(leaf => !ACT.test(leaf.role)).map(said))];
-          kept.push(`${pad}${node.line.replace(/:$/, '')}: ${texts.join(', ')}${buttons.length ? `. Buttons: ${buttons.join(', ')}` : ''}`);
+          kept.push(`${pad}${node.line.replace(/:$/, '')}: ${texts.join(', ')}${buttons.length ? `. Buttons: ${buttons.join(', ')}` : ''}${open.length ? `. Menu open: ${open.join(', ')}` : ''}`);
         } else if (brief && node.role === 'columnheader') {
           let j = i;
           while (nodes[j + 1]?.role === 'columnheader') j++;
@@ -536,13 +542,18 @@ async function serve(extensions) {
   const after = async (done, before) => {
     // a page fills in over a few seconds (lists load): wait until two views in a row say the same
     let now = await state();
-    for (let tries = 0; tries < 8; tries++) {
-      await page.waitForTimeout(500);
-      const next = await state();
-      const same = next.length === now.length && next.every((line, i) => key(line) === key(now[i]));
-      now = next;
-      if (same) break;
-    }
+    const settle = async () => {
+      for (let tries = 0; tries < 8; tries++) {
+        await page.waitForTimeout(500);
+        const next = await state();
+        const same = next.length === now.length && next.every((line, i) => key(line) === key(now[i]));
+        now = next;
+        if (same) break;
+      }
+    };
+    await settle();
+    // the address changes before the new page is drawn: what was read may still be the old page
+    if (before.page !== now.page) await settle();
     const first = (await where()).line;
     // another page: what look would say, so that no second command is needed (a diff cut short hid the buttons)
     if (before.page !== address(first)) {
@@ -725,6 +736,12 @@ async function serve(extensions) {
       // small models copy the usage line as it is
       if (/^<.*>$/.test(claim.trim()) || /^<.*>$/.test(reason.join(' ').trim()))
         throw new Error('not recorded: "<claim>" and "<reason>" are placeholders. Write the claim you checked and what you saw, in your own words.');
+      // "did not change ..." sent as a pass: the word was picked wrong. Sent back once; the same command again is accepted.
+      // ponytail: a word list; a claim that is itself a negative ("X is not shown") passes on the second send
+      if (status === 'passed' && refused !== command && /\b(did not|didn't|does not|doesn't|not change|never|instead of)\b/i.test(`${claim} ${reason.join(' ')}`)) {
+        refused = command;
+        throw new Error('not recorded: you wrote that it did NOT happen. That is a fail: send fail, or the same command again if pass is right.');
+      }
       // the same claim again, in other words: a small model records it twice, or never stops
       // ponytail: shared words of 3 letters or more, 80% of the shorter claim; two close claims would need other words
       const words = text => new Set(text.toLowerCase().match(/[a-z0-9]{3,}/g) ?? []);
@@ -771,7 +788,7 @@ async function serve(extensions) {
         const step = told(name, rest); // before the action: the ids are those of the tree the model read
         try {
           // going in circles: nothing but a verdict is accepted any more, and a skip is a fine verdict
-          if (sinceVerdict >= 15 && !['pass', 'fail', 'skip', 'stop', 'restart'].includes(name))
+          if (sinceVerdict >= (checks.length ? 15 : 25) && !['pass', 'fail', 'skip', 'stop', 'restart'].includes(name))
             throw new Error(`${sinceVerdict} commands without a verdict: not run. Record pass, fail or skip for the claim you are on (skip "<claim>" "<what you tried>" if you could not see it). After that you can go on.`);
           if (!commands[name]) throw new Error(`unknown command "${name}". The commands are: ${Object.keys(commands).filter(c => c !== 'stop').join(', ')}. Example: node rvp/pd.mjs click "Images"`);
           let reopened = '';
@@ -786,7 +803,9 @@ async function serve(extensions) {
           ok = false;
           text = `error: ${String(error.message ?? error).split('\n').slice(0, 6).join('\n')}`;
         }
-        if (++sinceVerdict >= 8 && name !== 'stop') text += `\n${sinceVerdict} commands since the last verdict. Record pass, fail or skip for the claim you are on, then go to the next one.`;
+        if (lost && name !== 'stop') text = `Your previous command (${lost.command}) was done; its answer, which your timeout cut:\n${lost.text}\n\nAnswer to this command:\n${text}`;
+        lost = undefined;
+        if (++sinceVerdict >= (checks.length ? 8 : 12) && name !== 'stop') text += `\n${sinceVerdict} commands since the last verdict. Record pass, fail or skip for the claim you are on, then go to the next one.`;
         appendFileSync(join(out, 'actions.log'), `$ ${[name, ...rest].join(' ')}\n${text.slice(0, 600)}\n\n`);
         // one line per action, for whoever watches the run
         const lines = text.split('\n');
@@ -795,6 +814,7 @@ async function serve(extensions) {
         appendFileSync(join(out, 'progress.log'), `${new Date().toISOString().slice(11, 19)} ${(step ?? [name, ...rest].join(' ')).slice(0, 160)} → ${shown.slice(0, 200)}\n`);
         // what the comment shows: actions only, in plain words
         if (step) appendFileSync(join(out, 'steps.log'), `${step.replace(/\s+/g, ' ').slice(0, 300)}${ok ? '' : ' (did not work)'}\n`);
+        if (request.socket.destroyed) lost = { command: [name, ...rest].join(' ').slice(0, 80), text: text.slice(0, 800) };
         response.writeHead(ok ? 200 : 400).end(text);
       });
     });

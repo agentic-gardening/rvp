@@ -34,7 +34,7 @@ You are on page /images. Tabs here: [Summary] (open), History.
 - Use names, or the id printed next to a thing. Buttons of a row: always the id, every row has the same names.
 - After `click`, `fill` or `press` the answer is only what changed in the window (the whole
   window when the page changed).
-- A row is one line: values, then buttons. Actions that are not there are in its `kebab menu`
+- A row is one line: values, then buttons, then `Menu open:` with its items when its menu is open. Actions that are not there are in its `kebab menu`
   (click it) or on the details page (click the name of the item).
 - Ids work only in these commands, never inside JavaScript: the page does not know them.
 - Tooltips exist only under the mouse. `hover` answers
@@ -52,13 +52,14 @@ You are on page /images. Tabs here: [Summary] (open), History.
    says it is the open one. Something similar elsewhere proves nothing.
 3. Show it: `shot <id> "<what it shows>"` on the element that proves or disproves the claim.
 4. Give the verdict at once with `pass`, `fail` or `skip` and the id of that element. Never return
-   to a claim that has a verdict. Two failed attempts: `skip`, saying what you tried. After 15
-   commands without a verdict, only a verdict is accepted.
+   to a claim that has a verdict. Two failed attempts: `skip`, saying what you tried. After 25
+   commands without a verdict (15 once you gave one), only a verdict is accepted.
 5. When every claim has a verdict, write `rvp/notes.md` (three to ten lines) and stop.
 
 ## Rules
 
-- Before a command, write one short sentence at most.
+- Before a command, write one short sentence at most. Never set a timeout on a command.
+- A text that should show for a moment and was not seen: `skip`, it may have been too short.
 - Say only what you observed; the reason of a `pass` quotes what an answer printed.
 - The app not doing what is claimed is a `fail`. A wrong `pass` is worse than a `skip`.
 - In a claim, a reason or the notes, name things by their text, never by an id.
