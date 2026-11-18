@@ -342,7 +342,8 @@ async function serve(extensions) {
         if (brief && node.role === 'navigation' && below.length && below.every(leaf => leaf.role === 'link')) {
           kept.push(`${pad}- navigation: ${below.map(said).join(', ')}`);
         } else if (brief && node.role === 'row' && below.length) {
-          const buttons = below.filter(leaf => ACT.test(leaf.role)).map(said);
+          // with their ids: several rows have the same buttons, so a name alone is not enough to use one
+          const buttons = below.filter(leaf => ACT.test(leaf.role)).map(leaf => `${leaf.text ?? leaf.name}${/ \[id=\w+\]/.exec(leaf.line)?.[0] ?? ''}${/\[disabled\]/.test(leaf.line) ? ' (disabled)' : ''}`);
           const texts = [...new Set(below.filter(leaf => !ACT.test(leaf.role)).map(said))];
           kept.push(`${pad}${node.line.replace(/:$/, '')}: ${texts.join(', ')}${buttons.length ? `. Buttons: ${buttons.join(', ')}` : ''}`);
         } else if (brief && node.role === 'columnheader') {
@@ -631,13 +632,15 @@ async function serve(extensions) {
     click: async (...words) => {
       const { id, locator } = await target(words);
       const [label, found, before] = [what(id), describe(id), await state()];
+      // only when the click is in a dialog: anywhere else the mouse must stay where it is (an open menu closes without it)
+      const inDialog = await locator.evaluate(el => !!el.closest('[role="dialog"],[role="alertdialog"]')).catch(() => false);
       await watchTooltip();
       await locator.click({ timeout: 10_000 });
       // A tooltip that changes once a dialog is confirmed ("Updating image"): the mouse left the hovered
       // button for the dialog, so it is put back on it and its tooltip is watched while the app works.
       let title;
       // mouse.move, not hover(): hover() waits for the dialog to be gone, and a short update is over by then
-      const box = hovered && hovered.label !== label && (await hovered.locator.boundingBox({ timeout: 500 }).catch(() => undefined));
+      const box = inDialog && hovered && hovered.label !== label && (await hovered.locator.boundingBox({ timeout: 500 }).catch(() => undefined));
       if (box) {
         title = `Tooltip of ${hovered.label} after the click`;
         // moved again and again: the button gets the mouse only once the dialog over it is gone

@@ -26,12 +26,12 @@ You are on page /images. Tabs here: [Summary] (open), History.
 - navigation: Dashboard, Containers, Pods, Images, Volumes, Networks, Secrets, Kubernetes, Extensions, Accounts, Settings
 - heading "images" [id=e407]
 - button "Pull" [id=e432]
-- row "quay.io/podman/hello" [id=e669]: USED, podman, 2 years. Buttons: Run Image, Delete Image (disabled), kebab menu
+- row "quay.io/podman/hello" [id=e669]: USED, podman, 2 years. Buttons: Run Image [id=e675], Delete Image [id=e681] (disabled), kebab menu [id=e688]
 ```
 
 - The first line says the page, the tabs with the open one, and the tooltip if one is shown.
   Tabs are buttons; only this line tells which tab is open.
-- Use names. If several things have the name, the answer lists them with ids: use the id.
+- Use names, or the id printed next to a thing. Buttons of a row: always the id, every row has the same names.
 - After `click`, `fill` or `press` the answer is only what changed in the window (the whole
   window when the page changed).
 - A row is one line: values, then buttons. Actions that are not there are in its `kebab menu`
