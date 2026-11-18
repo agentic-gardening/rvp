@@ -30,9 +30,10 @@ const HELP = `commands:
   eval <javascript>      run an expression in the page and print its value
   eval <id> <function>   run a function on one element: eval e12 "el => el.getAttribute('title')"
   shot [id...] <name>    save a screenshot as evidence; elements with these ids are outlined in red
-  pass [id...] <claim> <reason>  record that a claim is verified (takes a screenshot, ids outlined)
-  fail [id...] <claim> <reason>  record that the app does not do what is claimed (same)
-  skip <claim> <reason>  record that a claim could not be checked
+  claims                 print the numbered claims to verify
+  pass <number> [id...] <reason>  record that this claim is verified (takes a screenshot, ids outlined)
+  fail <number> [id...] <reason>  record that the app does not do what the claim says (same)
+  skip <number> <reason>  record that this claim could not be checked
   restart [folder...]    restart the app, loading locally built extensions from these folders`;
 
 const [mode, ...args] = process.argv.slice(2);
@@ -61,7 +62,14 @@ async function serve(extensions) {
   mkdirSync(join(out, 'traces'), { recursive: true });
 
   const slug = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50);
-  const checks = [];
+  // The claims are the sentences of the instruction, numbered here: the model answers them by number.
+  // When it wrote them itself it recorded one twice, passed what it had seen fail, and never knew it was done.
+  // ponytail: one sentence = one claim; "e.g. x" splits in two, write the instruction without it
+  const claims = (process.env.RVP_INSTRUCTION ?? '').match(/[^.!?]+(?:[.!?]+(?=\s|$)|$)/g)?.map(c => c.trim()).filter(c => c.length > 3) ?? [];
+  if (!claims.length) claims.push(process.env.RVP_INSTRUCTION || 'the pull request does what it says');
+  const verdicts = new Map(); // claim number -> check
+  const open = () => claims.map((_, i) => i + 1).filter(n => !verdicts.has(n));
+  const left = () => (open().length ? `Open: ${open().map(n => `claim ${n}`).join(', ')}.` : 'All claims have a verdict: write rvp/notes.md and stop.');
   let app, page, recorder, folders = [], session = 0, shots = 0, pending = [];
   let refused; // the last verdict that was sent back to the model
   const lastChange = new Map(); // action -> what it changed in the window the last time
@@ -225,7 +233,7 @@ async function serve(extensions) {
     if (name === 'eval') return `run in the page: ${args.join(' ').slice(0, 120)}`;
     if (name === 'shot') return `screenshot${on ? ` of ${on}` : ''}: ${readable(rest.join(' '))}`;
     if (name === 'restart') return `restart the app${args.length ? ` with ${args.length} local extension(s)` : ''}`;
-    if (['pass', 'fail', 'skip'].includes(name)) return `${{ pass: 'passed', fail: 'failed', skip: 'skipped' }[name]}: ${readable(rest[0] ?? '')}`;
+    if (['pass', 'fail', 'skip'].includes(name)) return `${{ pass: 'passed', fail: 'failed', skip: 'skipped' }[name]}: ${readable(rest.join(' '))}`;
     return undefined;
   };
 
@@ -723,56 +731,47 @@ async function serve(extensions) {
     },
     shot: async (...args) => {
       const [outlined, name] = ids(args);
-      return `saved ${(await shot(readable(name.join(' ')) || 'screenshot', outlined)).join('')}`;
+      return `screenshot only, nothing was clicked: saved ${(await shot(readable(name.join(' ')) || 'screenshot', outlined)).join('')}`;
     },
     restart: async (...folders) => (await stop(), await start(folders), `restarted with ${folders.length} extension folder(s).`),
     stop: async () => (await stop(), setTimeout(() => process.exit(0), 100), 'stopped.'),
   };
+  commands.claims = async () => claims.map((c, i) => `${i + 1}. ${c}`).join('\n');
   for (const [verb, status] of [['pass', 'passed'], ['fail', 'failed'], ['skip', 'skipped']]) {
     commands[verb] = async (...args) => {
       const command = JSON.stringify(args);
-      const [outlined, [claim, ...reason]] = ids(args);
-      if (!claim) throw new Error(`usage: ${verb} [id...] "<claim>" "<reason>"`);
-      // small models copy the usage line as it is
-      if (/^<.*>$/.test(claim.trim()) || /^<.*>$/.test(reason.join(' ').trim()))
-        throw new Error('not recorded: "<claim>" and "<reason>" are placeholders. Write the claim you checked and what you saw, in your own words.');
-      // "did not change ..." sent as a pass: the word was picked wrong. Sent back once; the same command again is accepted.
-      // ponytail: a word list; a claim that is itself a negative ("X is not shown") passes on the second send
-      if (status === 'passed' && refused !== command && /\b(did not|didn't|does not|doesn't|not change|never|instead of)\b/i.test(`${claim} ${reason.join(' ')}`)) {
-        refused = command;
-        throw new Error('not recorded: you wrote that it did NOT happen. That is a fail: send fail, or the same command again if pass is right.');
-      }
-      // the same claim again, in other words: a small model records it twice, or never stops
-      // ponytail: shared words of 3 letters or more, 80% of the shorter claim; two close claims would need other words
-      const words = text => new Set(text.toLowerCase().match(/[a-z0-9]{3,}/g) ?? []);
-      const mine = words(claim);
-      const twice = checks.find(c => {
-        const theirs = words(c.claim);
-        const least = Math.min(mine.size, theirs.size);
-        return least > 0 && [...mine].filter(w => theirs.has(w)).length >= 0.8 * least;
-      });
-      if (twice) throw new Error(`already recorded as ${twice.status}: "${twice.claim}". Go to the next claim, or write rvp/notes.md and stop.`);
+      const [outlined, rest] = ids(args);
+      // the number of the claim: 1, #1, "claim 1"; not needed when there is one claim
+      const at = rest.findIndex(word => /^(claim )?#?\d+[.:]?$/i.test(word.trim()));
+      const n = at >= 0 ? Number(/\d+/.exec(rest[at])[0]) : claims.length === 1 ? 1 : 0;
+      if (at >= 0) rest.splice(at, 1);
+      if (!claims[n - 1]) throw new Error(`not recorded: say which claim, by its number: ${verb} 1 "<what you saw>". The claims:\n${await commands.claims()}`);
+      const claim = claims[n - 1];
       // A verdict about a tab that is not the open one is sent back once; the same command again is accepted.
-      const task = `${claim} ${process.env.RVP_INSTRUCTION ?? ''}`.toLowerCase();
+      const task = claim.toLowerCase();
       const { tabs } = status === 'skipped' || refused === command ? { tabs: [] } : await where();
       const named = tabs.find(t => !t.open && task.includes(t.name.toLowerCase()));
-      const open = tabs.filter(t => t.open);
-      if (named && !open.some(t => task.includes(t.name.toLowerCase()))) {
+      const shown = tabs.filter(t => t.open);
+      if (named && !shown.some(t => task.includes(t.name.toLowerCase()))) {
         refused = command;
         await tree();
         const [, id] = new RegExp(`"${named.name}"[^\\n]*\\[ref=((?:f\\d+)?e\\d+)\\]`).exec(snapshot) ?? [];
         throw new Error(
-          `not recorded: the task is about "${named.name}", but the open tab is ${open.map(t => `"${t.name}"`).join(', ') || 'another one'}.\n` +
+          `not recorded: the claim is about "${named.name}", but the open tab is ${shown.map(t => `"${t.name}"`).join(', ') || 'another one'}.\n` +
             `Click the "${named.name}" tab${id ? ` (id ${id})` : ''}, look, then give your verdict.\n` +
             `If the open tab really is the right place, send the same command again.`,
         );
       }
-      const note = status === 'skipped' ? '' : (await shot(readable(claim), outlined))[1];
+      const note = status === 'skipped' ? '' : (await shot(`claim ${n} ${status}`, outlined))[1];
       sinceVerdict = -1; // this command is counted right after
-      checks.push({ claim: readable(claim), status, reason: readable(reason.join(' ')), screenshots: pending });
+      // a second verdict for a claim replaces the first: a wrong one is corrected, not argued about
+      const again = verdicts.has(n);
+      verdicts.set(n, { claim, status, reason: readable(rest.join(' ')), screenshots: pending });
       pending = [];
-      writeFileSync(join(out, 'checks.json'), JSON.stringify(checks, null, 2));
-      return `recorded: ${status}: ${readable(claim)}${note}\n${checks.length} verdict${checks.length > 1 ? 's' : ''} recorded. If "What to verify" has nothing else, write rvp/notes.md and stop.`;
+      writeFileSync(join(out, 'checks.json'), JSON.stringify(claims.map((_, i) => verdicts.get(i + 1)).filter(Boolean), null, 2));
+      // for the step that runs the model: nothing is left to do
+      if (!open().length) writeFileSync(join(out, 'done'), '');
+      return `${again ? 'replaced' : 'recorded'}: claim ${n} ${status}${note}`;
     };
   }
 
@@ -788,8 +787,8 @@ async function serve(extensions) {
         const step = told(name, rest); // before the action: the ids are those of the tree the model read
         try {
           // going in circles: nothing but a verdict is accepted any more, and a skip is a fine verdict
-          if (sinceVerdict >= (checks.length ? 15 : 25) && !['pass', 'fail', 'skip', 'stop', 'restart'].includes(name))
-            throw new Error(`${sinceVerdict} commands without a verdict: not run. Record pass, fail or skip for the claim you are on (skip "<claim>" "<what you tried>" if you could not see it). After that you can go on.`);
+          if (sinceVerdict >= (verdicts.size ? 15 : 25) && !['pass', 'fail', 'skip', 'stop', 'restart'].includes(name))
+            throw new Error(`${sinceVerdict} commands without a verdict: not run. Record pass, fail or skip for the claim you are on (skip <number> "<what you tried>" if you could not see it). After that you can go on.`);
           if (!commands[name]) throw new Error(`unknown command "${name}". The commands are: ${Object.keys(commands).filter(c => c !== 'stop').join(', ')}. Example: node rvp/pd.mjs click "Images"`);
           let reopened = '';
           if (page.isClosed() && name !== 'stop' && name !== 'restart') {
@@ -805,7 +804,12 @@ async function serve(extensions) {
         }
         if (lost && name !== 'stop') text = `Your previous command (${lost.command}) was done; its answer, which your timeout cut:\n${lost.text}\n\nAnswer to this command:\n${text}`;
         lost = undefined;
-        if (++sinceVerdict >= (checks.length ? 8 : 12) && name !== 'stop') text += `\n${sinceVerdict} commands since the last verdict. Record pass, fail or skip for the claim you are on, then go to the next one.`;
+        // a screenshot is not a step of the work: it does not use up the commands
+        if (name !== 'shot' && name !== 'claims') sinceVerdict++;
+        if (name !== 'stop' && name !== 'claims') {
+          if (open().length && sinceVerdict >= (verdicts.size ? 8 : 12)) text += `\n${sinceVerdict} commands since the last verdict: record pass, fail or skip now.`;
+          text += `\n${left()}`;
+        }
         appendFileSync(join(out, 'actions.log'), `$ ${[name, ...rest].join(' ')}\n${text.slice(0, 600)}\n\n`);
         // one line per action, for whoever watches the run
         const lines = text.split('\n');

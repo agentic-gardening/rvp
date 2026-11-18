@@ -12,10 +12,10 @@ node rvp/pd.mjs click "Images"            click by name (by id when a name is no
 node rvp/pd.mjs hover "Save Image"        mouse on it: prints its tooltip. On a row: the tooltip of each button
 node rvp/pd.mjs fill "search images" "hello"   type into a field
 node rvp/pd.mjs press Enter               press a key
-node rvp/pd.mjs shot e432 "what it shows" screenshot, element e432 outlined in red
-node rvp/pd.mjs pass e432 "<claim>" "<what you saw that proves it>"
-node rvp/pd.mjs fail e432 "<claim>" "<what you saw instead>"
-node rvp/pd.mjs skip "<claim>" "<why it could not be checked>"
+node rvp/pd.mjs shot e432 "what it shows" screenshot only, element e432 outlined in red: it clicks nothing
+node rvp/pd.mjs pass 1 e432 "what you saw"    claim 1 is true (e432: the element that shows it)
+node rvp/pd.mjs fail 1 e432 "what you saw instead"   claim 1 is false: the app does not do it
+node rvp/pd.mjs skip 1 "why"                  claim 1 could not be checked
 node rvp/pd.mjs eval e432 "el => el.title"   JavaScript on one element
 ```
 
@@ -46,15 +46,17 @@ You are on page /images. Tabs here: [Summary] (open), History.
 
 ## Steps
 
-1. "What to verify" below **alone decides what you check**, usually one to three claims. The pull
-   request text only explains them. Your plan, if you wrote one, is in `rvp/plan.md`.
+1. The numbered claims of "What to verify" below are **all you check**. The pull request text only
+   explains them. Your plan, if you wrote one, is in `rvp/plan.md`.
 2. One claim at a time: open the page, tab or dialog the claim names, and check the first line
    says it is the open one. Something similar elsewhere proves nothing.
-3. Show it: `shot <id> "<what it shows>"` on the element that proves or disproves the claim.
-4. Give the verdict at once with `pass`, `fail` or `skip` and the id of that element. Never return
-   to a claim that has a verdict. Two failed attempts: `skip`, saying what you tried. After 25
-   commands without a verdict (15 once you gave one), only a verdict is accepted.
-5. When every claim has a verdict, write `rvp/notes.md` (three to ten lines) and stop.
+3. As soon as you saw what the claim says, or saw that the app does something else, give the
+   verdict **before anything else**: `pass`, `fail` or `skip` with the number of the claim.
+   Two failed attempts: `skip`, saying what you tried. After 25 commands without a verdict (15
+   once you gave one), only a verdict is accepted.
+4. A verdict sent again for the same number replaces the first one: correct a mistake that way.
+5. Every answer ends with the claims still open. When none is left, write `rvp/notes.md` (three
+   to ten lines) and stop.
 
 ## Rules
 
@@ -62,7 +64,7 @@ You are on page /images. Tabs here: [Summary] (open), History.
 - A text that should show for a moment and was not seen: `skip`, it may have been too short.
 - Say only what you observed; the reason of a `pass` quotes what an answer printed.
 - The app not doing what is claimed is a `fail`. A wrong `pass` is worse than a `skip`.
-- In a claim, a reason or the notes, name things by their text, never by an id.
+- In a reason or the notes, name things by their text, never by an id.
 - Write files only in `rvp/`. No `git commit`, no `git push`, no GitHub calls.
 - On macOS there is no container engine: `skip` what needs running containers.
 <!-- when: engine -->
