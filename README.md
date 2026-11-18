@@ -38,7 +38,10 @@ result.json     outcome (pass | fail | mixed | no_result) and one entry per clai
 media/          screenshots (.png) with the evidence outlined in red, one video per app session (.webm)
                 the video skips the time where nothing moves (a still window lasts 1 second at most)
 traces/         Playwright traces with the real timing (npx playwright show-trace <file>)
+TASK.md         the task given to the model
 actions.log     every command the model ran on the app, with what the app answered
+progress.log    one line per command (what the run page shows live)
+build.log       pnpm install and build output (build-base.log for the base), ollama-pull.log
 notes.md        what the model says it did
 agent.log       the model's session
 ```

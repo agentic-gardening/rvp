@@ -77,7 +77,9 @@ runs:
         cd "$RVP_TOOLS"
         curl -fsSL --retry 3 -o "$O" "https://github.com/ollama/ollama/releases/download/v0.40.16/$O"
         curl -fsSL --retry 3 -o "$C" "https://github.com/anomalyco/opencode/releases/download/v1.19.6/$C"
-        printf '%s  %s\n%s  %s\n' "$OS" "$O" "$CS" "$C" | shasum -a 256 -c -
+        # Git Bash on Windows has sha256sum only, macOS has shasum only
+        if command -v sha256sum > /dev/null; then sum=(sha256sum); else sum=(shasum -a 256); fi
+        printf '%s  %s\n%s  %s\n' "$OS" "$O" "$CS" "$C" | "${sum[@]}" -c -
         mkdir ollama opencode
         for pair in "$O:ollama" "$C:opencode"; do
           file=${pair%%:*} dir=${pair##*:}
@@ -102,7 +104,9 @@ runs:
         export OLLAMA_MODELS="$RVP_TOOLS/models" OLLAMA_CONTEXT_LENGTH=32768
         nohup "$ollama" serve > "$RVP_OUT/ollama.log" 2>&1 &
         for _ in $(seq 60); do curl -sf http://127.0.0.1:11434/api/version > /dev/null && break; sleep 1; done
-        "$ollama" pull "$MODEL"
+        echo "pulling $MODEL (progress in ollama-pull.log of the result folder)"
+        "$ollama" pull "$MODEL" > "$RVP_OUT/ollama-pull.log" 2>&1 || { tail -n 20 "$RVP_OUT/ollama-pull.log"; exit 1; }
+        echo "done in ${SECONDS}s"
 
     - name: save ollama, opencode and the model
       if: steps.tools.outputs.cache-hit != 'true'
@@ -158,13 +162,15 @@ runs:
         git -C pd-base fetch -q --depth 1 "https://github.com/$REPO" "$base"
         git -C pd-base checkout -q FETCH_HEAD
 
-    - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+    - name: install pnpm
+      uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       with:
         package_json_file: pd/package.json
         run_install: false
 
     # No dependency cache on purpose: this job runs PR code, and a cache it writes would be restored by later runs.
-    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+    - name: install Node.js
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version-file: pd/.nvmrc
 
@@ -186,18 +192,21 @@ runs:
       shell: bash
       working-directory: pd
       run: |
-        pnpm install --frozen-lockfile
-        pnpm build
+        # the output goes to build.log of the result folder; its end is shown only on failure
+        run() { echo "> $*"; local t=$SECONDS; "$@" >> "$RVP_OUT/build.log" 2>&1 || { tail -n 80 "$RVP_OUT/build.log"; exit 1; }; echo "  done in $((SECONDS - t))s"; }
+        run pnpm install --frozen-lockfile
+        run pnpm build
         # the session video is encoded with Playwright's ffmpeg
-        pnpm exec playwright install ffmpeg
+        run pnpm exec playwright install ffmpeg
 
     - name: build the base
       if: env.RVP_BEFORE_AFTER == 'true'
       shell: bash
       working-directory: pd-base
       run: |
-        pnpm install --frozen-lockfile
-        pnpm build
+        run() { echo "> $*"; local t=$SECONDS; "$@" >> "$RVP_OUT/build-base.log" 2>&1 || { tail -n 80 "$RVP_OUT/build-base.log"; exit 1; }; echo "  done in $((SECONDS - t))s"; }
+        run pnpm install --frozen-lockfile
+        run pnpm build
 
     - name: start Podman Desktop
       shell: bash
@@ -213,18 +222,15 @@ runs:
         # fails here, before any model time is spent, if the build cannot start
         for _ in $(seq 180); do grep -q '^ready$' "$RVP_OUT/session.log" && break; sleep 1; done
         node rvp/pd.mjs look Dashboard || { cat "$RVP_OUT/session.log"; exit 1; }
-        rm -f "$RVP_OUT/actions.log"
+        rm -f "$RVP_OUT/actions.log" "$RVP_OUT/progress.log"
 
-    - name: agent
+    - name: task given to the agent
       shell: bash
       working-directory: pd
       env:
         PR: ${{ inputs.pr }}
         INSTRUCTION: ${{ inputs.instruction }}
         MODEL: ${{ inputs.model }}
-        MINUTES: ${{ inputs.timeout-minutes }}
-        OPENCODE_DISABLE_AUTOUPDATE: '1'
-        OPENCODE_DISABLE_CLAUDE_CODE: '1'
       run: |
         node -e '
           const fs = require("fs");
@@ -246,8 +252,28 @@ runs:
               models: { [process.env.MODEL]: { limit: { context: 32768, output: 8192 } } },
             } },
           }));
+          // shown as text, never rendered: part of it was written by the pull request author
+          if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            "<details><summary>Task given to the agent (" + process.env.MODEL + ")</summary>\n\n~~~~markdown\n" +
+            fs.readFileSync("rvp/TASK.md", "utf8").replace(/~~~/g, "~~ ~") + "\n~~~~\n\n</details>\n\n");
         '
+        cp rvp/TASK.md "$RVP_OUT/TASK.md"
+        cat rvp/TASK.md
+
+    - name: agent
+      shell: bash
+      working-directory: pd
+      env:
+        MODEL: ${{ inputs.model }}
+        MINUTES: ${{ inputs.timeout-minutes }}
+        OPENCODE_DISABLE_AUTOUPDATE: '1'
+        OPENCODE_DISABLE_CLAUDE_CODE: '1'
+      run: |
         export OPENCODE_CONFIG="$RUNNER_TEMP/opencode.json"
+        # one line per action of the model, shown as it happens (the model thinks between two lines)
+        touch "$RVP_OUT/progress.log"
+        tail -n +1 -f "$RVP_OUT/progress.log" &
+        progress=$!
         # the prompt is a file: no command-line length limit on Windows, and the model can read it again
         prompt="Read the file rvp/TASK.md and carry out the task it describes."
         more=()
@@ -255,7 +281,7 @@ runs:
         # a small model often ends its turn early: while no verdict is recorded, send it back to work
         for try in 1 2 3 4; do
           [ "$SECONDS" -lt "$end" ] || break
-          echo "--- attempt $try" >> "$RVP_OUT/agent.log"
+          echo "--- attempt $try" | tee -a "$RVP_OUT/agent.log"
           "$RVP_OPENCODE" run --auto --model "ollama/$MODEL" "${more[@]}" "$prompt" >> "$RVP_OUT/agent.log" 2>&1 &
           agent=$!
           ( sleep $((end - SECONDS)); kill "$agent" 2> /dev/null ) &
@@ -266,7 +292,11 @@ runs:
           more=(--continue)
           prompt="You stopped before recording a verdict, so the task is not done. Run: node rvp/pd.mjs look. Then continue the task of rvp/TASK.md and record pass, fail or skip for each claim."
         done
+        sleep 1
+        kill "$progress" 2> /dev/null || true
+        echo "::group::end of the model's session (all of it is in agent.log of the result folder)"
         tail -n 200 "$RVP_OUT/agent.log"
+        echo "::endgroup::"
 
     - name: stop and write the result
       if: always()
@@ -284,8 +314,11 @@ runs:
           [ -f pd/rvp/notes.md ] && cp pd/rvp/notes.md "$RVP_OUT/notes.md"
         fi
         node "$GITHUB_ACTION_PATH/dist/result.mjs" "$RVP_OUT"
+        # the run's Summary page: the comment without its images
+        node "$GITHUB_ACTION_PATH/../comment/dist/index.mjs" --dry-run "$RVP_OUT" | grep -vE '\]\(media/|^\|' >> "$GITHUB_STEP_SUMMARY" || true
 
-    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+    - name: upload the result
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       if: always()
       with:
         name: rvp-result

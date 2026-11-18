@@ -36,7 +36,8 @@ You are on page /extensions. Tabs here: [Installed] (open), Catalog, Local exten
       - generic [id=e459]: Installed
 ```
 
-- To click something, use its id: `node rvp/pd.mjs click e114`.
+- To click something, use its id, copied exactly as printed: `node rvp/pd.mjs click e114`. Ids look
+  like `e114` or `f1e114`.
 - Tabs are buttons. Only the first line tells which tab is open. In the example the open tab is
   Installed: what you see is the Installed tab. To see the Local extensions tab, click it
   (`node rvp/pd.mjs click e421`) and check that the first line now says `[Local extensions] (open)`.

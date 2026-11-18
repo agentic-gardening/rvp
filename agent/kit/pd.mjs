@@ -13,6 +13,8 @@ import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const PORT = 47615;
+// element ids of the window tree: e12, or f1e12 after the window was reloaded
+const ID = /^(f\d+)?e\d+$/;
 const checkout = resolve(import.meta.dirname, '..');
 const out = process.env.RVP_OUT ?? join(import.meta.dirname, 'out');
 
@@ -256,7 +258,7 @@ async function serve(extensions) {
   /** Leading element ids of a command: `shot e12 e15 the two tabs` -> [['e12', 'e15'], ['the two tabs']] */
   const ids = args => {
     const found = [];
-    while (/^e\d+$/.test(args[0] ?? '')) found.push(args.shift());
+    while (ID.test(args[0] ?? '')) found.push(args.shift());
     return [found, args];
   };
 
@@ -302,7 +304,7 @@ async function serve(extensions) {
   }
 
   const element = async id => {
-    if (!/^e\d+$/.test(id ?? '')) throw new Error(`"${id}" is not an element id. Run look and use an id such as e12.`);
+    if (!ID.test(id ?? "")) throw new Error(`"${id}" is not an element id. Run look and use an id such as e12.`);
     const locator = page.locator(`aria-ref=${id}`);
     if (!(await locator.count())) throw new Error(`there is no element ${id} in the window now. Ids change after every action: run look again.`);
     return locator;
@@ -345,6 +347,9 @@ async function serve(extensions) {
       const command = JSON.stringify(args);
       const [outlined, [claim, ...reason]] = ids(args);
       if (!claim || !reason.length) throw new Error(`usage: ${verb} [id...] "<claim>" "<reason>"`);
+      // small models copy the usage line as it is
+      if (/^<.*>$/.test(claim.trim()) || /^<.*>$/.test(reason.join(' ').trim()))
+        throw new Error('not recorded: "<claim>" and "<reason>" are placeholders. Write the claim you checked and what you saw, in your own words.');
       // A verdict about a tab that is not the open one is sent back once; the same command again is accepted.
       const task = `${claim} ${process.env.RVP_INSTRUCTION ?? ''}`.toLowerCase();
       const { tabs } = status === 'skipped' || refused === command ? { tabs: [] } : await where();
@@ -353,7 +358,7 @@ async function serve(extensions) {
       if (named && !open.some(t => task.includes(t.name.toLowerCase()))) {
         refused = command;
         await tree();
-        const [, id] = new RegExp(`"${named.name}"[^\\n]*\\[ref=(e\\d+)\\]`).exec(snapshot) ?? [];
+        const [, id] = new RegExp(`"${named.name}"[^\\n]*\\[ref=((?:f\\d+)?e\\d+)\\]`).exec(snapshot) ?? [];
         throw new Error(
           `not recorded: the task is about "${named.name}", but the open tab is ${open.map(t => `"${t.name}"`).join(', ') || 'another one'}.\n` +
             `Click the "${named.name}" tab${id ? ` (id ${id})` : ''}, look, then give your verdict.\n` +
@@ -392,6 +397,10 @@ async function serve(extensions) {
           text = `error: ${String(error.message ?? error).split('\n').slice(0, 6).join('\n')}`;
         }
         appendFileSync(join(out, 'actions.log'), `$ ${[name, ...rest].join(' ')}\n${text.slice(0, 600)}\n\n`);
+        // one line per action, for whoever watches the run
+        const lines = text.split('\n');
+        const shown = [...new Set([lines[0], lines.find(line => line.startsWith('You are on'))])].filter(Boolean).join(' ');
+        appendFileSync(join(out, 'progress.log'), `${new Date().toISOString().slice(11, 19)} ${[name, ...rest].join(' ').slice(0, 160)} → ${shown.slice(0, 200)}\n`);
         response.writeHead(ok ? 200 : 400).end(text);
       });
     });

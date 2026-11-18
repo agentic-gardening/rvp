@@ -41,10 +41,11 @@ const bash = (script: string, cwd: string, env: Record<string, string | undefine
 
 mkdirSync(work, { recursive: true });
 const githubEnv = join(work, 'env');
-const base = { ...process.env, RUNNER_TEMP: work, RUNNER_OS: runnerOs, GITHUB_ACTION_PATH: join(root, 'agent'), GITHUB_ENV: githubEnv };
+const base = { ...process.env, GITHUB_STEP_SUMMARY: join(work, 'summary.md'), RUNNER_TEMP: work, RUNNER_OS: runnerOs, GITHUB_ACTION_PATH: join(root, 'agent'), GITHUB_ENV: githubEnv };
 if (existsSync(join(work, 'pd/rvp/pd.mjs'))) bash('node rvp/pd.mjs stop > /dev/null 2>&1 || true', join(work, 'pd'), base); // left over from an interrupted run
 rmSync(join(work, 'rvp-out'), { recursive: true, force: true });
 writeFileSync(githubEnv, '');
+rmSync(join(work, 'summary.md'), { force: true });
 
 let failed = '';
 for (const step of action.runs.steps) {
