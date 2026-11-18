@@ -5,6 +5,9 @@
 #   /rvp macos check that ...          (linux by default; windows and macos also work)
 #
 # The result comes back as a comment on the same pull request.
+#
+# Replace <commit-sha> (twice) with a commit of agentic-gardening/rvp: organizations often only allow
+# actions pinned to a full commit SHA, and a pinned version does not change under you.
 name: rvp
 run-name: rvp on #${{ github.event.issue.number }}
 
@@ -56,7 +59,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: agentic-gardening/rvp/agent@main
+      - uses: agentic-gardening/rvp/agent@<commit-sha>
         with:
           pr: ${{ github.event.issue.number }}
           repo: ${{ github.repository }}
@@ -76,7 +79,7 @@ jobs:
         with:
           name: rvp-result
           path: result
-      - uses: agentic-gardening/rvp/comment@main
+      - uses: agentic-gardening/rvp/comment@<commit-sha>
         with:
           dir: result
           repo: ${{ github.repository }}

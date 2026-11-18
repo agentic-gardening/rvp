@@ -69,7 +69,8 @@ video and `actions.log` are there so a person can check them.
 `/rvp <what to check>` on a pull request (`/rvp macos <what to check>` to pick the runner), and
 posts the result on that pull request. To use it:
 
-1. Copy it to `.github/workflows/rvp.yml` on the default branch of the repository to verify.
+1. Copy it to `.github/workflows/rvp.yml` on the default branch of the repository to verify, and
+   replace `<commit-sha>` with the rvp commit to use.
 2. If this repository (rvp) is private, allow the other one to use it: Settings → Actions →
    General → Access → accessible from repositories in the organization.
 
