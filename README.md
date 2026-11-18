@@ -40,6 +40,7 @@ media/          screenshots (.png) with the evidence outlined in red, one video 
 traces/         Playwright traces with the real timing (npx playwright show-trace <file>)
 TASK.md         the task given to the model
 actions.log     every command the model ran on the app, with what the app answered
+steps.log       the same actions in plain words, with names instead of ids (shown in the comment)
 progress.log    one line per command (what the run page shows live)
 build.log       pnpm install and build output (build-base.log for the base), ollama-pull.log
 notes.md        what the model says it did

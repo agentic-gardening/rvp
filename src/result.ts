@@ -26,6 +26,9 @@ const MAX_CHECKS = 50;
 const MAX_MEDIA = 40;
 const MAX_BYTES = 10 * 1024 * 1024;
 const ANSI = /\x1b\[[0-9;]*m/g;
+// element ids the model used to click things ([id=e554], (e553), e540-e551): noise for a reader
+const IDS = /\s*(?:[[(](?:id=)?(?:f\d+)?e\d+(?:-(?:f\d+)?e\d+)?[\])]|\bid=(?:f\d+)?e\d+\b|\b(?:f\d+)?e\d{2,}(?:-(?:f\d+)?e\d+)?\b)/g;
+export const withoutIds = (text: string): string => text.replace(IDS, '');
 
 export function outcome(checks: Check[]): Result['outcome'] {
   const passed = checks.filter(c => c.status === 'passed').length;
@@ -70,7 +73,7 @@ export function finish(outDir: string, env: Record<string, string | undefined>):
     instruction: env.RVP_INSTRUCTION ?? '',
     outcome: outcome(checks),
     checks,
-    notes: notes.replace(ANSI, '').slice(0, 4000),
+    notes: withoutIds(notes.replace(ANSI, '')).slice(0, 4000),
   };
   writeFileSync(join(outDir, 'result.json'), JSON.stringify(result, null, 2));
   return result;

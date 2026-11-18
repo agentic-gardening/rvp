@@ -222,7 +222,7 @@ runs:
         # fails here, before any model time is spent, if the build cannot start
         for _ in $(seq 180); do grep -q '^ready$' "$RVP_OUT/session.log" && break; sleep 1; done
         node rvp/pd.mjs look Dashboard || { cat "$RVP_OUT/session.log"; exit 1; }
-        rm -f "$RVP_OUT/actions.log" "$RVP_OUT/progress.log"
+        rm -f "$RVP_OUT/actions.log" "$RVP_OUT/progress.log" "$RVP_OUT/steps.log"
 
     - name: task given to the agent
       shell: bash

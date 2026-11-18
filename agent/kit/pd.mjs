@@ -183,6 +183,40 @@ async function serve(extensions) {
     const [, role, name] = new RegExp(`- (\\w+)(?: "((?:[^"\\\\]|\\\\.)*)")?[^\\n]*\\[ref=${id}\\]`).exec(snapshot) ?? [];
     return role && name ? { role, name: name.replace(/\\(.)/g, '$1') } : undefined;
   };
+  /** How a person would call an element: button "Local extensions". */
+  const what = id => {
+    const found = describe(id);
+    return found ? `${found.role} "${found.name}"` : 'an element';
+  };
+  /**
+   * Text written by the model, for people: element ids mean nothing to a reader. An id becomes the
+   * role and name of its element, or disappears when the text already names it or it has no name.
+   */
+  const readable = text =>
+    String(text)
+      .replace(/\s*([[(]?)(id=)?\b((?:f\d+)?e\d+)(-(?:f\d+)?e\d+)?\b[\])]?/g, (match, open, prefix, id, range, offset, whole) => {
+        const found = describe(id);
+        if (!found) return open || prefix || range ? '' : match; // a bare word that is not an id of this window is left alone
+        if (range) return '';
+        const before = whole.slice(0, offset).toLowerCase().replace(/['"\s]+$/, '');
+        return before.endsWith(found.name.toLowerCase()) ? '' : ` ${found.role} "${found.name}"`;
+      })
+      .replace(/ {2,}/g, ' ')
+      .trim();
+  /** One action in plain words, for the run page and the comment. Undefined for commands that only read. */
+  const told = (name, args) => {
+    const [targets, rest] = ids([...args]);
+    const on = targets.length ? targets.map(what).join(', ') : '';
+    if (name === 'click') return `click ${on || 'an element'}`;
+    if (name === 'fill') return `type "${rest.join(' ')}" into ${on || 'an element'}`;
+    if (name === 'press') return `press ${args[0]}`;
+    if (name === 'eval') return `run in the page: ${args.join(' ').slice(0, 120)}`;
+    if (name === 'shot') return `screenshot${on ? ` of ${on}` : ''}: ${readable(rest.join(' '))}`;
+    if (name === 'restart') return `restart the app${args.length ? ` with ${args.length} local extension(s)` : ''}`;
+    if (['pass', 'fail', 'skip'].includes(name)) return `${{ pass: 'passed', fail: 'failed', skip: 'skipped' }[name]}: ${readable(rest[0] ?? '')}`;
+    return undefined;
+  };
+
   const twin = async id => {
     const found = describe(id);
     const locator = found && basePage.getByRole(found.role, { name: found.name, exact: true }).first();
@@ -337,7 +371,7 @@ async function serve(extensions) {
     eval: async (...js) => JSON.stringify(await page.evaluate(js.join(' ')))?.slice(0, 2000) ?? 'undefined',
     shot: async (...args) => {
       const [outlined, name] = ids(args);
-      return `saved ${(await shot(name.join(' ') || 'screenshot', outlined)).join('')}`;
+      return `saved ${(await shot(readable(name.join(' ')) || 'screenshot', outlined)).join('')}`;
     },
     restart: async (...folders) => (await stop(), await start(folders), `restarted with ${folders.length} extension folder(s).`),
     stop: async () => (await stop(), setTimeout(() => process.exit(0), 100), 'stopped.'),
@@ -365,11 +399,11 @@ async function serve(extensions) {
             `If the open tab really is the right place, send the same command again.`,
         );
       }
-      const note = status === 'skipped' ? '' : (await shot(claim, outlined))[1];
-      checks.push({ claim, status, reason: reason.join(' '), screenshots: pending });
+      const note = status === 'skipped' ? '' : (await shot(readable(claim), outlined))[1];
+      checks.push({ claim: readable(claim), status, reason: readable(reason.join(' ')), screenshots: pending });
       pending = [];
       writeFileSync(join(out, 'checks.json'), JSON.stringify(checks, null, 2));
-      return `recorded: ${status}: ${claim}${note}`;
+      return `recorded: ${status}: ${readable(claim)}${note}`;
     };
   }
 
@@ -382,6 +416,7 @@ async function serve(extensions) {
       busy = busy.then(async () => {
         let text, ok = true;
         const [name, ...rest] = JSON.parse(body);
+        const step = told(name, rest); // before the action: the ids are those of the tree the model read
         try {
           if (!commands[name]) throw new Error(`unknown command "${name}".\n${HELP}`);
           let reopened = '';
@@ -400,7 +435,9 @@ async function serve(extensions) {
         // one line per action, for whoever watches the run
         const lines = text.split('\n');
         const shown = [...new Set([lines[0], lines.find(line => line.startsWith('You are on'))])].filter(Boolean).join(' ');
-        appendFileSync(join(out, 'progress.log'), `${new Date().toISOString().slice(11, 19)} ${[name, ...rest].join(' ').slice(0, 160)} → ${shown.slice(0, 200)}\n`);
+        appendFileSync(join(out, 'progress.log'), `${new Date().toISOString().slice(11, 19)} ${(step ?? [name, ...rest].join(' ')).slice(0, 160)} → ${shown.replace(/^(clicked|filled) \S+ ?/, '').slice(0, 200)}\n`);
+        // what the comment shows: actions only, in plain words
+        if (step) appendFileSync(join(out, 'steps.log'), `${step.replace(/\s+/g, ' ').slice(0, 300)}${ok ? '' : ' (did not work)'}\n`);
         response.writeHead(ok ? 200 : 400).end(text);
       });
     });

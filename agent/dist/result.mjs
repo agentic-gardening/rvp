@@ -5,6 +5,8 @@ var MEDIA = /^media\/[\w.-]+\.png$/;
 var MAX_CHECKS = 50;
 var MAX_BYTES = 10 * 1024 * 1024;
 var ANSI = /\x1b\[[0-9;]*m/g;
+var IDS = /\s*(?:[[(](?:id=)?(?:f\d+)?e\d+(?:-(?:f\d+)?e\d+)?[\])]|\bid=(?:f\d+)?e\d+\b|\b(?:f\d+)?e\d{2,}(?:-(?:f\d+)?e\d+)?\b)/g;
+var withoutIds = (text) => text.replace(IDS, "");
 function outcome(checks) {
   const passed = checks.filter((c) => c.status === "passed").length;
   const failed = checks.filter((c) => c.status === "failed").length;
@@ -39,7 +41,7 @@ ${(read(join(outDir, "agent.log")) ?? "").slice(-1500)}`);
     instruction: env.RVP_INSTRUCTION ?? "",
     outcome: outcome(checks),
     checks,
-    notes: notes.replace(ANSI, "").slice(0, 4000)
+    notes: withoutIds(notes.replace(ANSI, "")).slice(0, 4000)
   };
   writeFileSync(join(outDir, "result.json"), JSON.stringify(result, null, 2));
   return result;

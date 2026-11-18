@@ -43,7 +43,8 @@ export function render(result: Result, url: (media: string) => string, runUrl: s
     out.push(...screenshots(c.screenshots, url));
   }
   if (result.notes.trim()) out.push('', '<details><summary>Agent notes</summary>', '', block(result.notes, 3000), '', '</details>');
-  if (actions.trim()) out.push('', '<details><summary>What the agent did</summary>', '', block(actions, 8000), '', '</details>');
+  const steps = actions.split('\n').filter(line => line.trim()).slice(0, 80);
+  if (steps.length) out.push('', '<details><summary>What the agent did</summary>', '', ...steps.map((step, i) => `${i + 1}. ${inline(step, 300)}`), '', '</details>');
   out.push(
     '',
     '<sub>A local model drove a build of this PR and recorded these verdicts itself. They are its judgement, not a proof: check the screenshots, the video and the action log before relying on them.</sub>',
@@ -87,7 +88,7 @@ export function screenshots(files: string[], url: (media: string) => string): st
 
 const readActions = (dir: string): string => {
   try {
-    return readFileSync(join(dir, 'actions.log'), 'utf8');
+    return readFileSync(join(dir, 'steps.log'), 'utf8'); // one line per action, written by the session tool
   } catch {
     return '';
   }

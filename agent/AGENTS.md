@@ -69,6 +69,8 @@ Kubernetes, Extensions, Accounts, Settings.
 
 ## Rules
 
+- Ids such as `e114` are only for commands. In a claim, a reason or the notes, never write an id:
+  name things by their text, like a person would ("the Local extensions tab", "the search field").
 - Say only what you observed. The reason of a `pass` must quote what `look` or `eval` printed.
 - If the app does not do what the pull request says, that is a `fail`. Never record a `pass` to be nice.
 - If you tried and cannot tell, use `skip`. A wrong `pass` is worse than a `skip`.

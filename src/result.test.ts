@@ -63,13 +63,14 @@ test('check refuses media that escapes the folder, is a symlink, or is not an im
 test('untrusted text cannot mention, link or break out of a code block', () => {
   expect(inline('@maintainer [x](http://evil) <img>')).toBe('@​maintainer \\[x\\](http://evil) &lt;img\\>');
   const body = render(
-    { pr: 1, repo: 'o/r', runner: 'linux', model: 'm', instruction: 'i', outcome: 'fail', notes: '', checks: [{ claim: 'c', status: 'failed', reason: '@all', screenshots: [] }] },
+    { pr: 1, repo: 'o/r', runner: 'linux', model: 'm', instruction: 'i', outcome: 'fail', notes: 'x\n~~~~\n@all', checks: [{ claim: 'c', status: 'failed', reason: '@all', screenshots: [] }] },
     m => m,
     '',
-    'x\n~~~~\n@all',
+    'click button "x"\n<img src=x> @all',
   );
   expect(body).toContain('@​all');
-  expect(body).toContain('~~ ~~\n@all\n~~~~');
+  expect(body).toContain('~~ ~~\n@all\n~~~~'); // notes stay inside their block
+  expect(body).toContain('1. click button "x"\n2. &lt;img src=x\\> @​all'); // actions are a list of plain lines
 });
 
 test('screenshots of one shot are grouped in a table', async () => {
@@ -80,4 +81,14 @@ test('screenshots of one shot are grouped in a table', async () => {
   expect(themes).toContain('| Light | Dark |\n|---|---|\n| ![a tab](media/01-a-tab.png) | ![a tab](media/01-a-tab.dark.png) |');
   const all = screenshots(['media/01-a.png', 'media/01-a.dark.png', 'media/01-a.before.png', 'media/01-a.before.dark.png'], url).join('\n');
   expect(all).toContain('| | Light | Dark |\n|---|---|---|\n| Before | ![a](media/01-a.before.png) | ![a](media/01-a.before.dark.png) |\n| After | ![a](media/01-a.png) | ![a](media/01-a.dark.png) |');
+});
+
+test('element ids are removed from the notes', async () => {
+  const { withoutIds } = await import('./result');
+  expect(
+    withoutIds(
+      "In region search [id=e554] on Local extensions tab, there is exactly one textbox 'search extensions' [id=e560], positioned in the content region (e553) which comes after the header with tabs (e540-e551)",
+    ),
+  ).toBe("In region search on Local extensions tab, there is exactly one textbox 'search extensions', positioned in the content region which comes after the header with tabs");
+  expect(withoutIds('uses e5 cores, id=f1e12 and e114 here')).toBe('uses e5 cores, and here');
 });
