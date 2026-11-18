@@ -28,7 +28,7 @@ const baseBuilt = existsSync(baseMarker) && readFileSync(baseMarker, 'utf8') ===
 
 // what a cache hit, or a machine that is already set up, would skip
 const skip: Record<string, boolean> = {
-  'download ollama and opencode': existsSync(join(work, 'rvp-tools/ollama')),
+  'download ollama and pi': existsSync(join(work, 'rvp-tools/pi')),
   'fetch the pull request': built,
   'build Podman Desktop': built,
   'fetch the base of the pull request': baseBuilt,

@@ -18,7 +18,7 @@ sentence says, not what you meant.
 ## What happens
 
 1. **agent job** (no secret, read-only token)
-   - installs Ollama, the model and opencode (pinned, cached);
+   - installs Ollama, the model and the pi agent (pinned, cached);
    - fetches the pull request, `pnpm install`, `pnpm build`;
    - starts the built app and keeps it running;
    - the model reads the instruction and the PR description, then drives the app with a small
@@ -44,7 +44,8 @@ steps.log       the same actions in plain words, with names instead of ids (show
 progress.log    one line per command (what the run page shows live)
 build.log       pnpm install and build output (build-base.log for the base), ollama-pull.log
 notes.md        what the model says it did
-agent.log       the model's session
+agent.log       what the model said at the end of each attempt
+pi-session/     the whole conversation of the model (JSONL)
 ```
 
 The verdicts are the model's own judgement. The screenshot taken at the moment of each verdict, the
