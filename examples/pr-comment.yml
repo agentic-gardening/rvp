@@ -3,6 +3,7 @@
 #
 #   /rvp check that the search field of the Local extensions tab is below the tabs
 #   /rvp macos check that ...          (linux by default; windows and macos also work)
+#   /rvp model=qwen3.5:4b check that ...   (another Ollama model; can be combined with the runner)
 #
 # The result comes back as a comment on the same pull request.
 #
@@ -31,6 +32,7 @@ jobs:
     outputs:
       runner: ${{ steps.parse.outputs.runner }}
       instruction: ${{ steps.parse.outputs.instruction }}
+      model: ${{ steps.parse.outputs.model }}
     steps:
       - id: parse
         env:
@@ -42,13 +44,20 @@ jobs:
           [[ "$BODY" =~ ^/rvp[[:space:]] ]] || { echo "not an rvp command"; exit 1; }
           # one line, so it cannot add other outputs
           text=$(printf '%s' "${BODY#/rvp}" | tr '\r\n\t' '   ' | sed -e 's/^ *//' -e 's/ *$//')
-          runner=linux
-          case "$text" in
-            linux\ * | windows\ * | macos\ *) runner=${text%% *} text=${text#* } ;;
-          esac
-          text=${text#"${text%%[! ]*}"} # spaces left after the runner name
+          runner=linux model=
+          # options come first, in any order; the rest is the instruction
+          while :; do
+            case "$text" in
+              linux\ * | windows\ * | macos\ *) runner=${text%% *} ;;
+              model=*\ *) model=${text%% *} model=${model#model=} ;;
+              *) break ;;
+            esac
+            text=${text#* }
+            text=${text#"${text%%[! ]*}"} # spaces left after the option
+          done
+          [[ -z "$model" || "$model" =~ ^[A-Za-z0-9._/-]+(:[A-Za-z0-9._-]+)?$ ]] || { echo "bad model name"; exit 1; }
           [ -n "$text" ] || { echo "nothing to verify"; exit 1; }
-          { echo "runner=$runner"; echo "instruction=$text"; } >> "$GITHUB_OUTPUT"
+          { echo "runner=$runner"; echo "model=$model"; echo "instruction=$text"; } >> "$GITHUB_OUTPUT"
           gh api "$REACTIONS" -f content=eyes > /dev/null || true
 
   # Runs the pull request's code and a model: no secret, read-only token.
@@ -64,6 +73,7 @@ jobs:
           pr: ${{ github.event.issue.number }}
           repo: ${{ github.repository }}
           instruction: ${{ needs.parse.outputs.instruction }}
+          model: ${{ needs.parse.outputs.model || 'qwen3.5:9b' }}
 
   # Holds the write token, runs neither the pull request's code nor the model.
   comment:

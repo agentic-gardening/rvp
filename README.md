@@ -66,7 +66,8 @@ video and `actions.log` are there so a person can check them.
 ## Triggering it with a pull request comment
 
 `examples/pr-comment.yml` starts a run when someone who can push to the repository comments
-`/rvp <what to check>` on a pull request (`/rvp macos <what to check>` to pick the runner), and
+`/rvp <what to check>` on a pull request (`/rvp macos model=qwen3.5:4b <what to check>` to pick the
+runner and the model), and
 posts the result on that pull request. To use it:
 
 1. Copy it to `.github/workflows/rvp.yml` on the default branch of the repository to verify, and
