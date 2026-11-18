@@ -344,9 +344,10 @@ runs:
           # the prompt stays small, and the checkout cannot add to it
           "$RVP_PI" -p -c --model "local/$MODEL" --tools read,bash,write -nc -ns -ne -np --offline --thinking "${RVP_THINKING:-off}" --session-dir "$RVP_OUT/pi-session" "$prompt" > /dev/null 2>> "$RVP_OUT/agent.log" &
           agent=$!
-          ( sleep $((end - SECONDS)); kill "$agent" 2> /dev/null ) &
+          # it is ended when the time is over, or when its work is done (verdicts and notes written): it rarely stops by itself
+          ( while [ "$SECONDS" -lt "$end" ] && ! { [ -f rvp/notes.md ] && [ -f "$RVP_OUT/checks.json" ]; }; do sleep 5; done; sleep 5; kill "$agent" 2> /dev/null ) &
           watchdog=$!
-          wait "$agent" || echo "agent stopped with an error or ran out of time"
+          wait "$agent" || echo "agent ended: its notes are written, the time is over, or it stopped with an error"
           kill "$watchdog" 2> /dev/null || true
           [ -f "$RVP_OUT/checks.json" ] && break
           prompt="You stopped before recording a verdict, so the task is not done. Run: node rvp/pd.mjs look. Then continue the task of $here/rvp/TASK.md and record pass, fail or skip for each claim."

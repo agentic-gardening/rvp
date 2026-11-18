@@ -14,6 +14,12 @@ const HEAD = {
   no_result: '⚠️ no result',
 } as const;
 
+/** A skipped claim is not a passed one: say how many of each. */
+const head = (result: Result): string => {
+  const count = (status: string): number => result.checks.filter(c => c.status === status).length;
+  return result.outcome === 'pass' && count('skipped') ? `✅ ${count('passed')} passed · ⚪ ${count('skipped')} not checked` : HEAD[result.outcome];
+};
+
 const strip = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, '').replace(/[\u0000-\u0008\u000b-\u001f]/g, '');
 
 /** Untrusted text on one line: no mentions, no HTML, no markdown links or formatting. */
@@ -31,7 +37,7 @@ export const block = (s: string, max: number, lang = ''): string =>
 
 export function render(result: Result, url: (media: string) => string, runUrl: string, actions: string, plan = ''): string {
   const out: string[] = [
-    `## rvp: ${HEAD[result.outcome]}`,
+    `## rvp: ${head(result)}`,
     '',
     `> ${inline(result.instruction, 600)}`,
     '',

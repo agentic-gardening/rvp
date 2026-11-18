@@ -73,6 +73,10 @@ var HEAD = {
   mixed: "⚠️ some checks failed",
   no_result: "⚠️ no result"
 };
+var head = (result) => {
+  const count = (status) => result.checks.filter((c) => c.status === status).length;
+  return result.outcome === "pass" && count("skipped") ? `✅ ${count("passed")} passed · ⚪ ${count("skipped")} not checked` : HEAD[result.outcome];
+};
 var strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, "").replace(/[\u0000-\u0008\u000b-\u001f]/g, "");
 var inline = (s, max = 300) => strip(s).replace(/\s+/g, " ").slice(0, max).replace(/[\\`*_[\]#|!~>]/g, "\\$&").replace(/</g, "&lt;").replace(/@/g, "@​");
 var block = (s, max, lang = "") => `~~~~${lang}
@@ -80,7 +84,7 @@ ${strip(s).slice(0, max).replace(/~~~/g, "~~ ~")}
 ~~~~`;
 function render(result, url, runUrl, actions, plan = "") {
   const out = [
-    `## rvp: ${HEAD[result.outcome]}`,
+    `## rvp: ${head(result)}`,
     "",
     `> ${inline(result.instruction, 600)}`,
     "",

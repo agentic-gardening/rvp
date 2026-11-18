@@ -65,6 +65,7 @@ async function serve(extensions) {
   let app, page, recorder, folders = [], session = 0, shots = 0, pending = [];
   let refused; // the last verdict that was sent back to the model
   const lastChange = new Map(); // action -> what it changed in the window the last time
+  let hovered; // the last button hovered alone: its tooltip is watched again after the next clicks
   let sinceVerdict = 0; // commands since the last verdict: a small model can go in circles for an hour
   let baseApp, basePage, snapshot = ''; // the app without the pull request, and the last tree of the PR app
   const size = { width: 1280, height: 800 };
@@ -290,7 +291,7 @@ async function serve(extensions) {
   // --- what the model reads. It is read slowly (about 10 tokens per second on a CPU runner): every line counts. ---
   const ACT = /^(button|link|tab|textbox|searchbox|checkbox|switch|radio|combobox|menuitem|menuitemcheckbox|option|slider)$/;
   const BLOCK = /^(row|listitem|region|dialog|alertdialog|article|menu|toolbar|group|navigation|tablist|form)$/;
-  const HINT = 'Use: look "<text>" or look <id> to see one part.';
+  const HINT = 'Use: look "<text>" to see one part.';
   const indent = line => line.search(/\S/);
   const parse = line => {
     const [, role, , name] = /^\s*- (\w+)( "((?:[^"\\]|\\.)*)")?/.exec(line) ?? [];
@@ -396,12 +397,16 @@ async function serve(extensions) {
     if (what === 'all') return `${first}\n${cut(lines.filter(line => !/^\s*- (generic|img) \[id=\w+\]:?$/.test(line)), 7000, HINT)}`;
     if (ID.test(what)) {
       const i = lines.findIndex(line => line.includes(`[id=${what}]`));
-      if (i < 0) throw new Error(`there is no element ${what} in the window now. Run look again.`);
+      // an old id costs the model a whole turn: answer with the window as it is
+      if (i < 0) return `${what} is gone: the window changed.\n${first}\n${cut(compact(lines, true), limit, HINT)}`;
       return `${first}\n${cut(compact(within(lines, i)), 3000, HINT)}`;
     }
     const parts = new Map(); // first line of a part -> its lines
+    // whole words first: USED is not UNUSED
+    const word = new RegExp(`(?<!\\w)${what.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?!\\w)`, 'i');
+    const has = lines.some(line => word.test(line)) ? line => word.test(line) : line => line.toLowerCase().includes(what.toLowerCase());
     lines.forEach((line, i) => {
-      if (!line.toLowerCase().includes(what.toLowerCase())) return;
+      if (!has(line)) return;
       const block = blockOf(lines, i);
       if (block >= 0) parts.set(block, within(lines, block));
       else if (![...parts.keys()].some(start => start <= i && i < start + parts.get(start).length)) parts.set(Math.max(0, i - 3), lines.slice(Math.max(0, i - 3), i + 7));
@@ -423,7 +428,8 @@ async function serve(extensions) {
     });
     return { appeared, gone: [...left].flatMap(([line, times]) => Array(times).fill(line)) };
   };
-  const state = async () => compact((await tree()).split('\n'), true);
+  const address = line => /^You are on page \S+/.exec(line)?.[0];
+  const state = async () => Object.assign(compact((await tree()).split('\n'), true), { page: address((await where()).line) });
 
   /** Leading element ids of a command: `shot e12 e15 the two tabs` -> [['e12', 'e15'], ['the two tabs']] */
   const ids = args => {
@@ -537,6 +543,11 @@ async function serve(extensions) {
       if (same) break;
     }
     const first = (await where()).line;
+    // another page: what look would say, so that no second command is needed (a diff cut short hid the buttons)
+    if (before.page !== address(first)) {
+      hovered = undefined;
+      return `${done}\n${first}\n${cut(now, 1500, HINT)}`;
+    }
     const { appeared, gone } = changes(before, now);
     if (!appeared.length && !gone.length) return `${done}\n${first}\nNothing changed in the window.`;
     // A line that only changed state ([disabled], [expanded]...) is not new: a dialog opening changes a
@@ -609,9 +620,9 @@ async function serve(extensions) {
       const timer = setInterval(() => seen.at(-1) !== read() && seen.push(read()), 50);
       globalThis.__rvpTooltip = () => (clearInterval(timer), seen);
     });
-  const watchedTooltip = async () => {
+  const watchedTooltip = async (title = 'Tooltip during the click') => {
     const seen = await page.evaluate(() => globalThis.__rvpTooltip?.() ?? []).catch(() => []);
-    return seen.length > 1 ? `Tooltip during the click: ${seen.join(' → ')}` : '';
+    return seen.length > 1 ? `${title}: ${seen.join(' → ')}` : '';
   };
 
   const commands = {
@@ -622,11 +633,24 @@ async function serve(extensions) {
       const [label, found, before] = [what(id), describe(id), await state()];
       await watchTooltip();
       await locator.click({ timeout: 10_000 });
+      // A tooltip that changes once a dialog is confirmed ("Updating image"): the mouse left the hovered
+      // button for the dialog, so it is put back on it and its tooltip is watched while the app works.
+      let title;
+      // mouse.move, not hover(): hover() waits for the dialog to be gone, and a short update is over by then
+      const box = hovered && hovered.label !== label && (await hovered.locator.boundingBox({ timeout: 500 }).catch(() => undefined));
+      if (box) {
+        title = `Tooltip of ${hovered.label} after the click`;
+        // moved again and again: the button gets the mouse only once the dialog over it is gone
+        for (let i = 0; i < 24; i++) {
+          if (!(await where()).tips.length) await page.mouse.move(box.x + box.width / 2 + (i % 2), box.y + box.height / 2);
+          await page.waitForTimeout(50);
+        }
+      }
       // links and tabs only show another view; a button is repeated unless its name says it changes something
       const harmless = found && (found.role !== 'button' || !CHANGES.test(found.name));
       await follow(harmless ? async () => (await twin(id))?.click({ timeout: 5000 }) : undefined);
       const answer = await after(`clicked ${label}.`, before);
-      return [answer, await watchedTooltip()].filter(Boolean).join('\n');
+      return [answer, await watchedTooltip(title)].filter(Boolean).join('\n');
     },
     hover: async (...words) => {
       const { id, locator } = await target(words);
@@ -645,6 +669,7 @@ async function serve(extensions) {
         return `hovering ${label}: ${inside.length} buttons inside\n${rows.join('\n')}`;
       }
       const seen = await hoverOne(locator);
+      hovered = { locator, label };
       await follow(async () => (await twin(id))?.hover({ timeout: 5000 }));
       return `hovering ${label}${seen.disabled ? ' (disabled)' : ''}\n  ${tooltipOf(seen, describe(id)?.role ?? 'element')}`;
     },
@@ -697,6 +722,16 @@ async function serve(extensions) {
       // small models copy the usage line as it is
       if (/^<.*>$/.test(claim.trim()) || /^<.*>$/.test(reason.join(' ').trim()))
         throw new Error('not recorded: "<claim>" and "<reason>" are placeholders. Write the claim you checked and what you saw, in your own words.');
+      // the same claim again, in other words: a small model records it twice, or never stops
+      // ponytail: shared words of 3 letters or more, 80% of the shorter claim; two close claims would need other words
+      const words = text => new Set(text.toLowerCase().match(/[a-z0-9]{3,}/g) ?? []);
+      const mine = words(claim);
+      const twice = checks.find(c => {
+        const theirs = words(c.claim);
+        const least = Math.min(mine.size, theirs.size);
+        return least > 0 && [...mine].filter(w => theirs.has(w)).length >= 0.8 * least;
+      });
+      if (twice) throw new Error(`already recorded as ${twice.status}: "${twice.claim}". Go to the next claim, or write rvp/notes.md and stop.`);
       // A verdict about a tab that is not the open one is sent back once; the same command again is accepted.
       const task = `${claim} ${process.env.RVP_INSTRUCTION ?? ''}`.toLowerCase();
       const { tabs } = status === 'skipped' || refused === command ? { tabs: [] } : await where();
@@ -717,7 +752,7 @@ async function serve(extensions) {
       checks.push({ claim: readable(claim), status, reason: readable(reason.join(' ')), screenshots: pending });
       pending = [];
       writeFileSync(join(out, 'checks.json'), JSON.stringify(checks, null, 2));
-      return `recorded: ${status}: ${readable(claim)}${note}`;
+      return `recorded: ${status}: ${readable(claim)}${note}\n${checks.length} verdict${checks.length > 1 ? 's' : ''} recorded. If "What to verify" has nothing else, write rvp/notes.md and stop.`;
     };
   }
 
@@ -733,7 +768,7 @@ async function serve(extensions) {
         const step = told(name, rest); // before the action: the ids are those of the tree the model read
         try {
           // going in circles: nothing but a verdict is accepted any more, and a skip is a fine verdict
-          if (sinceVerdict >= 25 && !['pass', 'fail', 'skip', 'stop', 'restart'].includes(name))
+          if (sinceVerdict >= 15 && !['pass', 'fail', 'skip', 'stop', 'restart'].includes(name))
             throw new Error(`${sinceVerdict} commands without a verdict: not run. Record pass, fail or skip for the claim you are on (skip "<claim>" "<what you tried>" if you could not see it). After that you can go on.`);
           if (!commands[name]) throw new Error(`unknown command "${name}". The commands are: ${Object.keys(commands).filter(c => c !== 'stop').join(', ')}. Example: node rvp/pd.mjs click "Images"`);
           let reopened = '';
@@ -748,7 +783,7 @@ async function serve(extensions) {
           ok = false;
           text = `error: ${String(error.message ?? error).split('\n').slice(0, 6).join('\n')}`;
         }
-        if (++sinceVerdict >= 12 && name !== 'stop') text += `\n${sinceVerdict} commands since the last verdict. Record pass, fail or skip for the claim you are on, then go to the next one.`;
+        if (++sinceVerdict >= 8 && name !== 'stop') text += `\n${sinceVerdict} commands since the last verdict. Record pass, fail or skip for the claim you are on, then go to the next one.`;
         appendFileSync(join(out, 'actions.log'), `$ ${[name, ...rest].join(' ')}\n${text.slice(0, 600)}\n\n`);
         // one line per action, for whoever watches the run
         const lines = text.split('\n');

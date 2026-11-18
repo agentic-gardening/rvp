@@ -8,7 +8,6 @@ right now**. You operate it with `node rvp/pd.mjs` and record, for each claim, w
 ```
 node rvp/pd.mjs look                      what can be used or read in the window
 node rvp/pd.mjs look "hello"              the row or section that contains a text
-node rvp/pd.mjs look e669                 one element in detail
 node rvp/pd.mjs click "Images"            click by name (by id when a name is not unique: click e432)
 node rvp/pd.mjs hover "Save Image"        mouse on it: prints its tooltip. On a row: the tooltip of each button
 node rvp/pd.mjs fill "search images" "hello"   type into a field
@@ -33,14 +32,16 @@ You are on page /images. Tabs here: [Summary] (open), History.
 - The first line says the page, the tabs with the open one, and the tooltip if one is shown.
   Tabs are buttons; only this line tells which tab is open.
 - Use names. If several things have the name, the answer lists them with ids: use the id.
-- After `click`, `fill` or `press` the answer is only what changed in the window.
+- After `click`, `fill` or `press` the answer is only what changed in the window (the whole
+  window when the page changed).
 - A row is one line: values, then buttons. Actions that are not there are in its `kebab menu`
   (click it) or on the details page (click the name of the item).
 - Ids work only in these commands, never inside JavaScript: the page does not know them.
 - Tooltips exist only under the mouse. `hover` answers
   `styled tooltip, shown above the button: "..."`, or says that the browser shows its own tooltip
-  from the title (the old kind). For a tooltip that changes when the button is clicked: `hover`,
-  then `click`, and read the line `Tooltip during the click`.
+  from the title (the old kind). If the side is not the one claimed (left, not above): `fail`.
+  For a tooltip that changes when the button is used: `hover` it, `click` it, `click` the button
+  of the dialog if one opens, and read the line `Tooltip ... the click`.
 - You cannot see pictures: what you know comes from these answers.
 
 ## Steps
@@ -51,12 +52,13 @@ You are on page /images. Tabs here: [Summary] (open), History.
    says it is the open one. Something similar elsewhere proves nothing.
 3. Show it: `shot <id> "<what it shows>"` on the element that proves or disproves the claim.
 4. Give the verdict at once with `pass`, `fail` or `skip` and the id of that element. Never return
-   to a claim that has a verdict. Two failed attempts: `skip`, saying what you tried. After 25
+   to a claim that has a verdict. Two failed attempts: `skip`, saying what you tried. After 15
    commands without a verdict, only a verdict is accepted.
 5. When every claim has a verdict, write `rvp/notes.md` (three to ten lines) and stop.
 
 ## Rules
 
+- Before a command, write one short sentence at most.
 - Say only what you observed; the reason of a `pass` quotes what an answer printed.
 - The app not doing what is claimed is a `fail`. A wrong `pass` is worse than a `skip`.
 - In a claim, a reason or the notes, name things by their text, never by an id.

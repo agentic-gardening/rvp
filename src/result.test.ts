@@ -75,6 +75,13 @@ test('untrusted text cannot mention, link or break out of a code block', () => {
   expect(body).toContain('1. click button "x"\n2. &lt;img src=x\\> @​all'); // actions are a list of plain lines
 });
 
+test('a skipped claim is not counted as passed in the headline', () => {
+  const base = { pr: 1, repo: 'o/r', runner: 'linux', model: 'm', instruction: 'i', outcome: 'pass' as const, notes: '' };
+  const passed = { claim: 'a', status: 'passed' as const, screenshots: [] };
+  expect(render({ ...base, checks: [passed] }, m => m, '', '')).toContain('## rvp: ✅ all checks passed');
+  expect(render({ ...base, checks: [passed, { claim: 'b', status: 'skipped', screenshots: [] }] }, m => m, '', '')).toContain('## rvp: ✅ 1 passed · ⚪ 1 not checked');
+});
+
 test('screenshots of one shot are grouped in a table', async () => {
   const { screenshots } = await import('./comment');
   const url = (f: string): string => f;
