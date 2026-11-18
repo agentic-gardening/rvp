@@ -64,6 +64,7 @@ async function serve(extensions) {
   const checks = [];
   let app, page, recorder, folders = [], session = 0, shots = 0, pending = [];
   let refused; // the last verdict that was sent back to the model
+  const lastChange = new Map(); // action -> what it changed in the window the last time
   let sinceVerdict = 0; // commands since the last verdict: a small model can go in circles for an hour
   let baseApp, basePage, snapshot = ''; // the app without the pull request, and the last tree of the PR app
   const size = { width: 1280, height: 800 };
@@ -313,7 +314,9 @@ async function serve(extensions) {
       while (open.at(-1).depth >= indent(line)) open.pop(); // also for a line that is left out: what follows is not inside the previous one
       if (!p.role || p.role === 'img' || p.role === 'separator' || !(p.name || p.text)) continue;
       if (brief && p.role === 'contentinfo') { skip = indent(line); continue; }
-      const node = { ...p, depth: indent(line), line: line.trim(), kids: [] };
+      // [level] and [active] (the keyboard focus) say nothing useful here; a long text is cut
+      const shown = line.trim().replace(/ \[(level=\d+|active)\]/g, '').replace(/(: .{100}).+$/, '$1…');
+      const node = { ...p, depth: indent(line), line: shown, kids: [] };
       open.at(-1).kids.push(node);
       open.push(node);
       if (ACT.test(p.role) && p.role !== 'textbox' && p.role !== 'combobox') skip = indent(line);
@@ -536,14 +539,43 @@ async function serve(extensions) {
     const first = (await where()).line;
     const { appeared, gone } = changes(before, now);
     if (!appeared.length && !gone.length) return `${done}\n${first}\nNothing changed in the window.`;
-    // the new lines, each under what it is in (a row, a dialog, a page), so that they can be placed
-    const shown = new Set(appeared);
-    for (const i of appeared) for (let j = i - 1, level = indent(now[i]); j >= 0 && level > 0; j--) if (indent(now[j]) < level) (shown.add(j), (level = indent(now[j])));
-    return (
-      `${done}\n${first}` +
-      (appeared.length ? `\nAppeared:\n${cut([...shown].sort((a, b) => a - b).map(i => now[i]), 2000, HINT)}` : '') +
-      (gone.length ? `\nGone:\n${gone.slice(0, 3).map(line => `  ${line}`).join('\n')}${gone.length > 3 ? `\n  ... and ${gone.length - 3} more lines` : ''}` : '')
-    );
+    // A line that only changed state ([disabled], [expanded]...) is not new: a dialog opening changes a
+    // dozen of them in the background. Only a button or a field that changed state is worth one line.
+    const bare = line => line.trim().replace(/ \[[^\]]*\]/g, '').replace(/:$/, '');
+    const had = new Map();
+    for (const line of before) had.set(bare(line), (had.get(bare(line)) ?? 0) + 1);
+    const fresh = [], changed = [];
+    for (const i of appeared) {
+      if (!had.get(bare(now[i]))) { fresh.push(i); continue; }
+      had.set(bare(now[i]), had.get(bare(now[i])) - 1);
+      if (ACT.test(parse(now[i]).role ?? '')) changed.push(now[i].trim());
+    }
+    const still = new Set(now.map(bare));
+    const left = gone.filter(line => !still.has(bare(line)));
+    // new lines, grouped under the nearest thing they are in that was already there
+    const groups = new Map();
+    for (const i of fresh) {
+      let inside = -1;
+      for (let j = i - 1, level = indent(now[i]); j >= 0 && inside < 0; j--) {
+        if (indent(now[j]) >= level) continue;
+        level = indent(now[j]);
+        if (!fresh.includes(j)) inside = j;
+      }
+      groups.set(inside, [...(groups.get(inside) ?? []), i]);
+    }
+    const parts = [];
+    for (const [inside, lines] of groups) {
+      const least = Math.min(...lines.map(i => indent(now[i])));
+      parts.push(inside < 0 ? 'Appeared:' : `Appeared in ${bare(now[inside]).replace(/^- /, '')}:`, ...lines.map(i => `  ${now[i].slice(least)}`));
+    }
+    if (changed.length) parts.push(`Changed: ${changed.slice(0, 5).map(line => line.replace(/^- /, '')).join('; ')}`);
+    if (left.length) parts.push(`Gone: ${left.length} lines (${left[0].replace(/^- /, '').slice(0, 60)}${left.length > 1 ? ', ...' : ''})`);
+    const body = parts.length ? cut(parts, 800, 'Use: look to see the window.') : 'Nothing changed in the window.';
+    // a loop gives the same answer again and again: say so in one line
+    const told = body.replace(/ \[id=\w+\]/g, '');
+    const same = lastChange.get(done) === told && parts.length > 2;
+    lastChange.set(done, told);
+    return `${done}\n${first}\n${same ? 'Same result as the last time you did this.' : body}`;
   };
   const hoverOne = async locator => {
     await locator.hover({ timeout: 10_000 });
@@ -607,7 +639,8 @@ async function serve(extensions) {
         const rows = [];
         for (const p of inside) {
           const seen = await element(p.id).then(hoverOne).catch(() => undefined);
-          rows.push(`  ${p.role} "${p.name ?? ''}" [id=${p.id}]${seen?.disabled ? ' (disabled)' : ''}${seen?.menu ? ' (opens a menu)' : ''}: ${seen ? tooltipOf(seen, p.role) : 'could not be hovered'}`);
+          const twice = inside.filter(q => q.name === p.name).length > 1; // the id only tells apart two buttons with one name
+          rows.push(`  ${p.role} "${p.name ?? ''}"${twice ? ` [id=${p.id}]` : ''}${seen?.disabled ? ' (disabled)' : ''}${seen?.menu ? ' (opens a menu)' : ''}: ${seen ? tooltipOf(seen, p.role) : 'could not be hovered'}`);
         }
         return `hovering ${label}: ${inside.length} buttons inside\n${rows.join('\n')}`;
       }
