@@ -1,0 +1,83 @@
+import { expect, test } from 'bun:test';
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { inline, render } from './comment';
+import { check, finish } from './result';
+
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0]);
+
+function folder(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'rvp-test-'));
+  mkdirSync(join(dir, 'media'));
+  return dir;
+}
+
+test('finish turns recorded checks into a result the comment job accepts', () => {
+  const dir = folder();
+  writeFileSync(join(dir, 'media', 'a.png'), PNG);
+  writeFileSync(
+    join(dir, 'checks.json'),
+    JSON.stringify([
+      { claim: 'scrollbar is absent', status: 'passed', reason: 'no overflow', screenshots: ['media/a.png', '../../etc/passwd'] },
+      { claim: 'three extensions install', status: 'failed', reason: '\x1b[31mboom\x1b[0m', screenshots: [] },
+      { claim: 'made up status', status: 'great' },
+    ]),
+  );
+  const result = finish(dir, { RVP_PR: '12', RVP_REPO: 'o/r', RVP_RUNNER: 'linux', RVP_MODEL: 'm', RVP_INSTRUCTION: 'i' });
+  expect(result.outcome).toBe('mixed');
+  expect(result.checks).toEqual([
+    { claim: 'scrollbar is absent', status: 'passed', reason: 'no overflow', screenshots: ['media/a.png'] },
+    { claim: 'three extensions install', status: 'failed', reason: 'boom', screenshots: [] },
+  ]);
+  expect(check(dir)).toEqual(result);
+});
+
+test('no recorded check means no_result, not a crash', () => {
+  const dir = folder();
+  writeFileSync(join(dir, 'agent.log'), 'model gave up');
+  const result = finish(dir, {});
+  expect(result.outcome).toBe('no_result');
+  expect(result.notes).toContain('model gave up');
+  expect(check(dir).outcome).toBe('no_result');
+});
+
+test('check refuses media that escapes the folder, is a symlink, or is not an image', () => {
+  const write = (dir: string, shot: string) =>
+    writeFileSync(
+      join(dir, 'result.json'),
+      JSON.stringify({ pr: 1, repo: 'o/r', runner: '', model: '', instruction: '', outcome: 'pass', notes: '', checks: [{ claim: 'c', status: 'passed', screenshots: [shot] }] }),
+    );
+  const dir = folder();
+  write(dir, 'media/../../secret.png');
+  expect(() => check(dir)).toThrow('bad media path');
+  symlinkSync('/etc/hosts', join(dir, 'media', 'link.png'));
+  write(dir, 'media/link.png');
+  expect(() => check(dir)).toThrow('bad media file');
+  writeFileSync(join(dir, 'media', 'fake.png'), 'not a png');
+  write(dir, 'media/fake.png');
+  expect(() => check(dir)).toThrow('not a png');
+});
+
+test('untrusted text cannot mention, link or break out of a code block', () => {
+  expect(inline('@maintainer [x](http://evil) <img>')).toBe('@​maintainer \\[x\\](http://evil) &lt;img\\>');
+  const body = render(
+    { pr: 1, repo: 'o/r', runner: 'linux', model: 'm', instruction: 'i', outcome: 'fail', notes: '', checks: [{ claim: 'c', status: 'failed', reason: '@all', screenshots: [] }] },
+    m => m,
+    '',
+    'x\n~~~~\n@all',
+  );
+  expect(body).toContain('@​all');
+  expect(body).toContain('~~ ~~\n@all\n~~~~');
+});
+
+test('screenshots of one shot are grouped in a table', async () => {
+  const { screenshots } = await import('./comment');
+  const url = (f: string): string => f;
+  expect(screenshots(['media/01-a-tab.png'], url).join('\n')).toBe('\n![a tab](media/01-a-tab.png)\n<sub>a tab</sub>');
+  const themes = screenshots(['media/01-a-tab.png', 'media/01-a-tab.dark.png'], url).join('\n');
+  expect(themes).toContain('| Light | Dark |\n|---|---|\n| ![a tab](media/01-a-tab.png) | ![a tab](media/01-a-tab.dark.png) |');
+  const all = screenshots(['media/01-a.png', 'media/01-a.dark.png', 'media/01-a.before.png', 'media/01-a.before.dark.png'], url).join('\n');
+  expect(all).toContain('| | Light | Dark |\n|---|---|---|\n| Before | ![a](media/01-a.before.png) | ![a](media/01-a.before.dark.png) |\n| After | ![a](media/01-a.png) | ![a](media/01-a.dark.png) |');
+});

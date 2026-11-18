@@ -1,0 +1,88 @@
+name: verify
+run-name: verify ${{ inputs.repo }}#${{ inputs.pr }} on ${{ inputs.runner }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number
+        required: true
+        type: string
+      instruction:
+        description: What to verify, in plain words
+        required: true
+        type: string
+      runner:
+        description: Where to run
+        type: choice
+        options: [linux, windows, macos]
+        default: linux
+      repo:
+        description: Repository of the pull request
+        type: string
+        default: podman-desktop/podman-desktop
+      model:
+        description: Ollama model tag
+        type: string
+        default: qwen3.5:9b
+      timeout-minutes:
+        description: Time the model may spend
+        type: string
+        default: '60'
+      themes:
+        description: Screenshots in light and dark theme
+        type: boolean
+        default: true
+      before-after:
+        description: Also screenshot the app without the pull request (second build); auto = when the PR changes packages/renderer or packages/ui
+        type: choice
+        options: [auto, 'true', 'false']
+        default: auto
+
+permissions: {}
+
+jobs:
+  # Runs PR code and a model: no secret, read-only token.
+  agent:
+    runs-on: ${{ fromJSON('{"linux":"ubuntu-24.04","windows":"windows-2025","macos":"macos-26"}')[inputs.runner] }}
+    timeout-minutes: 240 # hard stop; the model's own budget is inputs.timeout-minutes
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: rvp
+          persist-credentials: false
+      - uses: ./rvp/agent
+        with:
+          pr: ${{ inputs.pr }}
+          instruction: ${{ inputs.instruction }}
+          repo: ${{ inputs.repo }}
+          model: ${{ inputs.model }}
+          timeout-minutes: ${{ inputs.timeout-minutes }}
+          themes: ${{ inputs.themes }}
+          before-after: ${{ inputs.before-after }}
+
+  # Holds the tokens, runs neither PR code nor the model: only reads the result folder.
+  comment:
+    needs: agent
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # screenshots are committed to the `media` branch
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: rvp
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rvp-result
+          path: result
+      - uses: ./rvp/comment
+        with:
+          dir: result
+          repo: ${{ inputs.repo }}
+          pr: ${{ inputs.pr }}
+          token: ${{ secrets.RVP_COMMENT_TOKEN }}

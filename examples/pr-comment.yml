@@ -1,0 +1,84 @@
+# Copy to .github/workflows/rvp.yml on the default branch of the repository whose pull requests you
+# want to verify. Then comment on a pull request:
+#
+#   /rvp check that the search field of the Local extensions tab is below the tabs
+#   /rvp macos check that ...          (linux by default; windows and macos also work)
+#
+# The result comes back as a comment on the same pull request.
+name: rvp
+run-name: rvp on #${{ github.event.issue.number }}
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+jobs:
+  # Only for a comment on a pull request, written by someone who can already push here.
+  parse:
+    if: >-
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/rvp') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write # the reaction on the comment
+    outputs:
+      runner: ${{ steps.parse.outputs.runner }}
+      instruction: ${{ steps.parse.outputs.instruction }}
+    steps:
+      - id: parse
+        env:
+          # free text: only ever read from the environment
+          BODY: ${{ github.event.comment.body }}
+          GH_TOKEN: ${{ github.token }}
+          REACTIONS: repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions
+        run: |
+          [[ "$BODY" =~ ^/rvp[[:space:]] ]] || { echo "not an rvp command"; exit 1; }
+          # one line, so it cannot add other outputs
+          text=$(printf '%s' "${BODY#/rvp}" | tr '\r\n\t' '   ' | sed -e 's/^ *//' -e 's/ *$//')
+          runner=linux
+          case "$text" in
+            linux\ * | windows\ * | macos\ *) runner=${text%% *} text=${text#* } ;;
+          esac
+          text=${text#"${text%%[! ]*}"} # spaces left after the runner name
+          [ -n "$text" ] || { echo "nothing to verify"; exit 1; }
+          { echo "runner=$runner"; echo "instruction=$text"; } >> "$GITHUB_OUTPUT"
+          gh api "$REACTIONS" -f content=eyes > /dev/null || true
+
+  # Runs the pull request's code and a model: no secret, read-only token.
+  agent:
+    needs: parse
+    runs-on: ${{ fromJSON('{"linux":"ubuntu-24.04","windows":"windows-2025","macos":"macos-26"}')[needs.parse.outputs.runner] }}
+    timeout-minutes: 240
+    permissions:
+      contents: read
+    steps:
+      - uses: agentic-gardening/rvp/agent@main
+        with:
+          pr: ${{ github.event.issue.number }}
+          repo: ${{ github.repository }}
+          instruction: ${{ needs.parse.outputs.instruction }}
+
+  # Holds the write token, runs neither the pull request's code nor the model.
+  comment:
+    needs: agent
+    if: ${{ !cancelled() && needs.agent.result != 'skipped' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # screenshots are committed to the `media` branch of this repository
+      pull-requests: write # the result comment
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rvp-result
+          path: result
+      - uses: agentic-gardening/rvp/comment@main
+        with:
+          dir: result
+          repo: ${{ github.repository }}
+          pr: ${{ github.event.issue.number }}
+          token: ${{ github.token }}

@@ -1,0 +1,10 @@
+{
+  "name": "rvp",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build src/finish.ts --target node --outfile agent/dist/result.mjs && bun build src/comment.ts --target node --outfile comment/dist/index.mjs",
+    "test": "BUN_TEST=1 bun test src",
+    "local": "bun local.ts"
+  }
+}

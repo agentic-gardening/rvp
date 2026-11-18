@@ -1,0 +1,23 @@
+name: rvp comment
+description: Turn an rvp result folder into a pull request comment. Runs nothing from the folder.
+
+inputs:
+  dir:
+    description: Downloaded result folder (result.json, media/, actions.log)
+    required: true
+  repo:
+    description: Repository of the pull request
+    required: true
+  pr:
+    description: Pull request number
+    required: true
+  token:
+    description: Token allowed to comment on the pull request
+    required: true
+  media_token:
+    description: Token with contents write on the repository running the workflow (screenshots go to its `media` branch)
+    default: ${{ github.token }}
+
+runs:
+  using: node24
+  main: dist/index.mjs

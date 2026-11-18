@@ -1,0 +1,50 @@
+// src/result.ts
+import { lstatSync, openSync, readFileSync, readSync, closeSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+var MEDIA = /^media\/[\w.-]+\.png$/;
+var MAX_CHECKS = 50;
+var MAX_BYTES = 10 * 1024 * 1024;
+var ANSI = /\x1b\[[0-9;]*m/g;
+function outcome(checks) {
+  const passed = checks.filter((c) => c.status === "passed").length;
+  const failed = checks.filter((c) => c.status === "failed").length;
+  if (passed + failed === 0)
+    return "no_result";
+  return failed === 0 ? "pass" : passed === 0 ? "fail" : "mixed";
+}
+var read = (path) => {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return;
+  }
+};
+function finish(outDir, env) {
+  let checks = [];
+  try {
+    checks = JSON.parse(read(join(outDir, "checks.json")) ?? "[]").filter((c) => typeof c?.claim === "string" && ["passed", "failed", "skipped"].includes(c.status)).slice(0, MAX_CHECKS).map((c) => ({
+      claim: c.claim.slice(0, 300),
+      status: c.status,
+      ...typeof c.reason === "string" ? { reason: c.reason.replace(ANSI, "").slice(0, 2000) } : {},
+      screenshots: (Array.isArray(c.screenshots) ? c.screenshots : []).filter((f) => typeof f === "string" && MEDIA.test(f))
+    }));
+  } catch {}
+  const notes = read(join(outDir, "notes.md")) ?? (checks.length ? "" : `No check was produced. End of the agent log:
+${(read(join(outDir, "agent.log")) ?? "").slice(-1500)}`);
+  const result = {
+    pr: Number(env.RVP_PR),
+    repo: env.RVP_REPO ?? "",
+    runner: env.RVP_RUNNER ?? "",
+    model: env.RVP_MODEL ?? "",
+    instruction: env.RVP_INSTRUCTION ?? "",
+    outcome: outcome(checks),
+    checks,
+    notes: notes.replace(ANSI, "").slice(0, 4000)
+  };
+  writeFileSync(join(outDir, "result.json"), JSON.stringify(result, null, 2));
+  return result;
+}
+
+// src/finish.ts
+var result = finish(process.argv[2], process.env);
+console.log(`outcome: ${result.outcome} (${result.checks.length} checks)`);
