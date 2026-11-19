@@ -214,7 +214,7 @@ runs:
           const subject = process.env.INSTRUCTION + " " + pr.title + " " + body;
           const wanted = {
             engine: /\b(images?|containers?|volumes?|pods?|build|registry|podman (pull|run|build))\b/i.test(subject),
-            extension: /extension/i.test(process.env.INSTRUCTION) && /install|load|build|custom|source/i.test(process.env.INSTRUCTION),
+            extension: /extension/i.test(process.env.INSTRUCTION) && /install|load|build|custom|source|icon|contribut/i.test(process.env.INSTRUCTION),
           };
           // What image and container claims need is created here: the model spent 9 minutes on it, or skipped it
           // and judged the wrong image. Nothing is prepared where no engine answers (macOS runners).

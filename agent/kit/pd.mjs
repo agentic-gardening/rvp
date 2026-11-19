@@ -5,7 +5,7 @@
 //   node rvp/pd.mjs serve [extension-folder...]   start the app and keep it running (one per job)
 //   node rvp/pd.mjs <command> [args...]           act on it; see HELP
 import { execFile, spawn } from 'node:child_process';
-import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -65,7 +65,7 @@ async function serve(extensions) {
   const verdicts = new Map(); // claim number -> check
   const open = () => claims.map((_, i) => i + 1).filter(n => !verdicts.has(n));
   const left = () => (open().length ? `Open: ${open().map(n => `claim ${n}`).join(', ')}.` : 'All claims have a verdict: write rvp/notes.md and stop.');
-  let app, alive = false, folders = [], shots = 0;
+  let app, home, alive = false, folders = [], shots = 0;
   let moments = []; // screenshots since the last verdict, one entry per moment: they are the evidence of the next one
   let refused; // the last verdict that was sent back to the model
   const lastChange = new Map(); // action -> what it changed in the window the last time
@@ -127,7 +127,7 @@ async function serve(extensions) {
 
   /** Start the app of this checkout with its own home, attach agent-browser, wait until the window is usable. */
   async function launch() {
-    const home = mkdtempSync(join(tmpdir(), 'rvp-home-'));
+    home = mkdtempSync(join(tmpdir(), 'rvp-home-'));
     mkdirSync(join(home, 'configuration'));
     writeFileSync(
       join(home, 'configuration', 'settings.json'),
@@ -222,6 +222,7 @@ async function serve(extensions) {
     if (name === 'eval' && on) return `run on ${on}: ${rest.join(' ').slice(0, 120)}`;
     if (name === 'fill') return on ? `type "${rest.join(' ')}" into ${on}` : `type "${args.slice(1).join(' ')}" into "${args[0]}"`;
     if (name === 'press') return `press ${args[0]}`;
+    if (name === 'extension') return `read what the extension "${args.join(' ')}" adds`;
     if (name === 'size') return `screenshots at window sizes ${args.join(' ') || '800x600, 1280x800, 1920x1080'}`;
     if (name === 'eval') return `run in the page: ${args.join(' ').slice(0, 120)}`;
     if (name === 'shot') return `screenshot${on ? ` of ${on}` : ''}: ${readable(rest.join(' '))}`;
@@ -446,6 +447,75 @@ async function serve(extensions) {
     if (!found.length) return '';
     return ` It may be in a menu (click one), or on the page of the item (click its name):\n${found.map(p => `  ${p.id}  ${p.name}${row(p.i) ? ` of row "${row(p.i).slice(0, 60)}"` : ''}`).join('\n')}`;
   };
+
+  /**
+   * A row whose icon comes from an extension says so: pictures are not in the tree, and the model cannot see them.
+   * The app gives such an icon the class podman-desktop-icon-<id>; it is drawn when its character is set and its font loaded.
+   */
+  async function icons(text) {
+    const found =
+      (await js(`[...document.querySelectorAll('[role="row"] [class*="podman-desktop-icon-"]')].map(el => {
+        const before = getComputedStyle(el, '::before');
+        const family = before.fontFamily.split(',')[0].replace(/["']/g, '').trim();
+        const font = [...document.fonts].find(f => f.family.replace(/["']/g, '') === family);
+        const drawn = !/^(none|normal|"")$/.test(before.content) && font?.status === 'loaded';
+        return [el.closest('[role="row"]').getAttribute('aria-label'), /podman-desktop-icon-([\\w-]+)/.exec(el.className.baseVal ?? el.className)[1], drawn ? 'drawn' : font ? 'not drawn: its font did not load' : 'not drawn: no font is registered for it'];
+      })`)) ?? [];
+    for (const [row, icon, state] of found) {
+      if (!row) continue;
+      const line = text.split('\n').find(l => l.trimStart().startsWith(`- row "${row}"`));
+      if (line) text = text.replace(line, `${line.replace(/[:.,\s]+$/, '')}. Icon from an extension: ${icon} (${state})`);
+    }
+    return text;
+  }
+
+  /** What an extension of the app adds and where it shows, read from its manifest: the research a small model does not do. */
+  function extension(name) {
+    if (!name) throw new Error('not done: extension "<name>", for example extension "Kind"');
+    const dirs = [[join(checkout, 'extensions'), 'bundled'], [join(home ?? '', 'plugins'), 'installed']];
+    const manifests = dirs.flatMap(([dir, kind]) =>
+      (existsSync(dir) ? readdirSync(dir) : []).flatMap(entry => {
+        try {
+          return [{ kind, ...JSON.parse(readFileSync(join(dir, entry, 'package.json'), 'utf8')) }];
+        } catch {
+          return [];
+        }
+      }),
+    );
+    const wanted = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const key = text => String(text ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const manifest =
+      manifests.find(m => [m.name, m.displayName].some(n => key(n) === wanted)) ?? manifests.find(m => [m.name, m.displayName].some(n => key(n).includes(wanted)));
+    if (!manifest) return `"${name}" is not in the app. Bundled or installed: ${manifests.map(m => m.displayName ?? m.name).join(', ')}.\nTo install it: click "Extensions", click "Catalog", install it, wait until look says it is installed, then run this again.`;
+    const { icons: declared = {}, views = {}, menus = {}, commands = [] } = manifest.contributes ?? {};
+    const PLACES = { 'icons/containersList': ['Containers', 'container'], 'icons/image': ['Images', 'image'] };
+    const lines = [`Extension "${manifest.displayName ?? manifest.name}" (${manifest.kind}).`];
+    const used = new Set();
+    for (const [place, entries] of Object.entries(views)) {
+      const [page, thing] = PLACES[place] ?? [];
+      for (const { when = '', icon = '' } of Array.isArray(entries) ? entries : []) {
+        const id = /\$\{(.*)\}/.exec(icon)?.[1] ?? icon;
+        used.add(id);
+        const label = /^\s*([\w./-]+) in (?:container|image)LabelKeys\s*$/.exec(when)?.[1];
+        if (!page) lines.push(`- icon "${id}": used in ${place}, when ${when}`);
+        else if (!label) lines.push(`- icon "${id}": shown in the ${page} list, on rows where: ${when}`);
+        else {
+          lines.push(`- icon "${id}": shown in the ${page} list, on ${thing}s that have the label ${label}`);
+          lines.push(
+            thing === 'container'
+              ? `  To see it: podman run -d --name rvp-${id} --label ${label}=x quay.io/podman/hello, then click "Containers" and look "rvp-${id}"`
+              : `  To see it: printf 'FROM quay.io/podman/hello\\nLABEL ${label}=x\\n' | podman build -t rvp-${id} -f - ., then click "Images" and look "rvp-${id}"`,
+          );
+        }
+      }
+    }
+    for (const id of Object.keys(declared)) if (!used.has(id)) lines.push(`- icon "${id}": declared, not attached to a list (the extension uses it in its own pages or for its provider)`);
+    const menuCount = Object.values(menus).flat().length;
+    if (menuCount || commands.length) lines.push(`- also: ${commands.length} command(s), ${menuCount} menu item(s)`);
+    if (lines.length === 1) lines.push('- it adds no icon.');
+    lines.push('A row that has an icon from an extension says so in look: "Icon from an extension: <id> (drawn)".');
+    return lines.join('\n');
+  }
 
   async function look(what, limit = 1200, tries = 3) {
     const lines = (await tree()).split('\n');
@@ -723,7 +793,8 @@ async function serve(extensions) {
 
   const commands = {
     // `look cell e59`: the id is what was meant
-    look: (...words) => look(words.find(word => ID.test(word)) ?? (words.join(' ') || undefined)),
+    look: async (...words) => icons(await look(words.find(word => ID.test(word)) ?? (words.join(' ') || undefined))),
+    extension: async (...words) => extension(words.join(' ').trim()),
     click: async (...words) => {
       const { id } = await target(words, true);
       const [label, before] = [what(id), await state()];

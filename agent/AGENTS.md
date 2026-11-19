@@ -95,6 +95,11 @@ podman build -t rvp-test-image <folder>               an image, from a Container
 
 ## Extensions
 
+- For a claim about what an extension adds (its icons): install it if it is not, then
+  `node rvp/pd.mjs extension "<name>"`. It says where each icon shows and the command that creates
+  what is needed. Run that command, open the page, `look "<name of the row>"`: the row says
+  `Icon from an extension: <id> (drawn)`. Quote that in the verdict, with the id of the row.
+  The catalog showing an extension proves nothing about its icons.
 - From an image: `click "Extensions"`, `click "Install custom..."`, `fill` the "OCI Image" field,
   `click "Install"`, then `look` until it reports the result.
 - Built from source: clone it outside this repository, `pnpm install` and `pnpm build` there, then
