@@ -33,11 +33,6 @@ on:
         description: Screenshots in light and dark theme
         type: boolean
         default: true
-      before-after:
-        description: Also screenshot the app without the pull request (second build); auto = when the PR changes packages/renderer or packages/ui
-        type: choice
-        options: [auto, 'true', 'false']
-        default: auto
 
 permissions: {}
 
@@ -61,7 +56,6 @@ jobs:
           model: ${{ inputs.model }}
           timeout-minutes: ${{ inputs.timeout-minutes }}
           themes: ${{ inputs.themes }}
-          before-after: ${{ inputs.before-after }}
 
   # Holds the tokens, runs neither PR code nor the model: only reads the result folder.
   comment:

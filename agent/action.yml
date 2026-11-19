@@ -20,11 +20,6 @@ inputs:
   themes:
     description: Take every screenshot in light and in dark theme
     default: 'true'
-  before-after:
-    description: >-
-      Also build the commit the pull request starts from and take every screenshot on both apps (adds a second build).
-      `auto` does it when the pull request changes the UI (packages/renderer or packages/ui); `true` or `false` forces it.
-    default: auto
   token:
     description: Read-only token, used once to read the PR title and body
     default: ${{ github.token }}
@@ -54,33 +49,39 @@ runs:
         echo "RVP_TOOLS=$RUNNER_TEMP/rvp-tools" >> "$GITHUB_ENV"
 
     # Tools first, and their cache is saved before any PR code runs, so PR code cannot poison it.
-    - name: restore ollama, pi and the model
+    - name: restore ollama, pi, agent-browser and the model
       id: tools
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/rvp-tools
-        key: rvp-tools-${{ runner.os }}-${{ runner.arch }}-ollama0.40.16-pi1.5.2-${{ inputs.model }}
+        key: rvp-tools-${{ runner.os }}-${{ runner.arch }}-ollama0.40.16-pi1.5.2-ab0.43.0-${{ inputs.model }}
 
-    - name: download ollama and pi
+    - name: download ollama, pi and agent-browser
       if: steps.tools.outputs.cache-hit != 'true'
       shell: bash
       run: |
         # pinned release assets: name and sha256
         case "$RUNNER_OS" in
           Linux)   O=ollama-linux-amd64.tar.zst   OS=87bfafb2acbc89b2e6a1be0a9043de6aa75fb450696f86bc426e65fc448f788d
-                   C=pi-linux-x64.tar.gz          CS=811c6f2c9e7aaee252b5404252e556fb713aa209c1f7f924226aa77d4ef70cb5 ;;
+                   C=pi-linux-x64.tar.gz          CS=811c6f2c9e7aaee252b5404252e556fb713aa209c1f7f924226aa77d4ef70cb5
+                   A=agent-browser-linux-x64      AS=8e69c9fb662514c9cf36e4911e94e913742ba066e55102486350e049dd847612 ;;
           macOS)   O=ollama-darwin.tgz            OS=a743717494315da7cd352982b805f6b992d4b4452ca117fd5fbf86c4ee46fca0
-                   C=pi-darwin-arm64.tar.gz       CS=56b5e194d485ced555667b8ba3276157a8272e9ecde9e001e428af80985bdd9b ;;
+                   C=pi-darwin-arm64.tar.gz       CS=56b5e194d485ced555667b8ba3276157a8272e9ecde9e001e428af80985bdd9b
+                   A=agent-browser-darwin-arm64   AS=05338a8eeddf0b3f9ebf0c87a6c21aedc10685608c68618e1a8483c43eae9c3f ;;
           Windows) O=ollama-windows-amd64.zip     OS=50fcf5ad54277f2fa5d173ebfc93bcb017adbc0c9ef2314daabc96ca9e6aa64e
-                   C=pi-windows-x64.zip           CS=e6adb8cb8c84eca14391ad24b363de9d2be98a89ca3ba3fdee1fa4de32b7f2e8 ;;
+                   C=pi-windows-x64.zip           CS=e6adb8cb8c84eca14391ad24b363de9d2be98a89ca3ba3fdee1fa4de32b7f2e8
+                   A=agent-browser-win32-x64.exe  AS=ebcef5ebea93c7ccf0fe3f8c18eee908ae9174dfef8e52a3dda6f24a59f630dc ;;
         esac
         cd "$RVP_TOOLS"
         curl -fsSL --retry 3 -o "$O" "https://github.com/ollama/ollama/releases/download/v0.40.16/$O"
         curl -fsSL --retry 3 -o "$C" "https://github.com/earendil-works/pi/releases/download/v1.5.2/$C"
+        curl -fsSL --retry 3 -o "$A" "https://github.com/vercel-labs/agent-browser/releases/download/v0.43.0/$A"
         # Git Bash on Windows has sha256sum only, macOS has shasum only
         if command -v sha256sum > /dev/null; then sum=(sha256sum); else sum=(shasum -a 256); fi
-        printf '%s  %s\n%s  %s\n' "$OS" "$O" "$CS" "$C" | "${sum[@]}" -c -
-        rm -rf ollama pi && mkdir ollama pi
+        printf '%s  %s\n%s  %s\n%s  %s\n' "$OS" "$O" "$CS" "$C" "$AS" "$A" | "${sum[@]}" -c -
+        rm -rf ollama pi ab && mkdir ollama pi ab
+        # agent-browser is one file, not an archive. It only attaches to the app: no `agent-browser install`, no browser download
+        case "$A" in *.exe) mv "$A" ab/agent-browser.exe ;; *) mv "$A" ab/agent-browser ;; esac
         for pair in "$O:ollama" "$C:pi"; do
           file=${pair%%:*} dir=${pair##*:}
           case "$file" in
@@ -98,9 +99,11 @@ runs:
       run: |
         ollama=$(find "$RVP_TOOLS/ollama" -type f \( -name ollama -o -name ollama.exe \) | head -1)
         pi=$(find "$RVP_TOOLS/pi" -type f \( -name pi -o -name pi.exe \) | head -1)
-        [ -n "$ollama" ] && [ -n "$pi" ] || { echo "ollama or pi binary not found"; exit 1; }
-        chmod +x "$ollama" "$pi"
+        ab=$(find "$RVP_TOOLS/ab" -type f -name 'agent-browser*' | head -1)
+        [ -n "$ollama" ] && [ -n "$pi" ] && [ -n "$ab" ] || { echo "ollama, pi or agent-browser binary not found"; exit 1; }
+        chmod +x "$ollama" "$pi" "$ab"
         echo "RVP_PI=$pi" >> "$GITHUB_ENV"
+        echo "RVP_AB=$ab" >> "$GITHUB_ENV"
         export OLLAMA_MODELS="$RVP_TOOLS/models" OLLAMA_CONTEXT_LENGTH=32768
         nohup "$ollama" serve > "$RVP_OUT/ollama.log" 2>&1 &
         for _ in $(seq 60); do curl -sf http://127.0.0.1:11434/api/version > /dev/null && break; sleep 1; done
@@ -108,7 +111,7 @@ runs:
         "$ollama" pull "$MODEL" > "$RVP_OUT/ollama-pull.log" 2>&1 || { tail -n 20 "$RVP_OUT/ollama-pull.log"; exit 1; }
         echo "done in ${SECONDS}s"
 
-    - name: save ollama, pi and the model
+    - name: save ollama, pi, agent-browser and the model
       if: steps.tools.outputs.cache-hit != 'true'
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
@@ -130,37 +133,6 @@ runs:
         rm -rf pd && git init -q pd
         git -C pd fetch -q --depth 1 "https://github.com/$REPO" "refs/pull/$PR/head"
         git -C pd checkout -q FETCH_HEAD
-
-    - name: decide before/after
-      shell: bash
-      env:
-        PR: ${{ inputs.pr }}
-        REPO: ${{ inputs.repo }}
-        WANTED: ${{ inputs.before-after }}
-        GH_TOKEN: ${{ inputs.token }}
-      run: |
-        if [ "$WANTED" = auto ]; then
-          # only file names are read from the pull request
-          if gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename' | grep -qE '^packages/(renderer|ui)/'; then WANTED=true; else WANTED=false; fi
-          echo "before/after: $WANTED (the pull request $([ "$WANTED" = true ] && echo changes || echo 'does not change') packages/renderer or packages/ui)"
-        fi
-        echo "RVP_BEFORE_AFTER=$WANTED" >> "$GITHUB_ENV"
-
-    - name: fetch the base of the pull request
-      if: env.RVP_BEFORE_AFTER == 'true'
-      shell: bash
-      env:
-        PR: ${{ inputs.pr }}
-        REPO: ${{ inputs.repo }}
-        GH_TOKEN: ${{ inputs.token }}
-      run: |
-        # the commit the pull request starts from: the comparison then shows only what the pull request changes
-        range=$(gh api "repos/$REPO/pulls/$PR" --jq '.base.sha + "..." + .head.sha')
-        base=$(gh api "repos/$REPO/compare/$range" --jq .merge_base_commit.sha)
-        [[ "$base" =~ ^[0-9a-f]{40}$ ]] || { echo "no merge base"; exit 1; }
-        rm -rf pd-base && git init -q pd-base
-        git -C pd-base fetch -q --depth 1 "https://github.com/$REPO" "$base"
-        git -C pd-base checkout -q FETCH_HEAD
 
     - name: install pnpm
       uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
@@ -196,17 +168,6 @@ runs:
         run() { echo "> $*"; local t=$SECONDS; "$@" >> "$RVP_OUT/build.log" 2>&1 || { tail -n 80 "$RVP_OUT/build.log"; exit 1; }; echo "  done in $((SECONDS - t))s"; }
         run pnpm install --frozen-lockfile
         run pnpm build
-        # the session video is encoded with Playwright's ffmpeg
-        run pnpm exec playwright install ffmpeg
-
-    - name: build the base
-      if: env.RVP_BEFORE_AFTER == 'true'
-      shell: bash
-      working-directory: pd-base
-      run: |
-        run() { echo "> $*"; local t=$SECONDS; "$@" >> "$RVP_OUT/build-base.log" 2>&1 || { tail -n 80 "$RVP_OUT/build-base.log"; exit 1; }; echo "  done in $((SECONDS - t))s"; }
-        run pnpm install --frozen-lockfile
-        run pnpm build
 
     - name: start Podman Desktop
       shell: bash
@@ -216,9 +177,7 @@ runs:
         RVP_INSTRUCTION: ${{ inputs.instruction }}
       run: |
         rm -rf rvp && cp -R "$GITHUB_ACTION_PATH/kit" rvp
-        base=()
-        if [ "$RVP_BEFORE_AFTER" = true ]; then base=(--base ../pd-base); fi
-        nohup node rvp/pd.mjs serve "${base[@]}" > "$RVP_OUT/session.log" 2>&1 &
+        nohup node rvp/pd.mjs serve > "$RVP_OUT/session.log" 2>&1 &
         # fails here, before any model time is spent, if the build cannot start
         for _ in $(seq 180); do grep -q '^ready$' "$RVP_OUT/session.log" && break; sleep 1; done
         node rvp/pd.mjs look Dashboard || { cat "$RVP_OUT/session.log"; exit 1; }

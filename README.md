@@ -18,7 +18,7 @@ sentence says, not what you meant.
 ## What happens
 
 1. **agent job** (no secret, read-only token)
-   - installs Ollama, the model and the pi agent (pinned, cached);
+   - installs Ollama, the model, the pi agent and agent-browser (pinned, cached);
    - fetches the pull request, `pnpm install`, `pnpm build`;
    - starts the built app and keeps it running;
    - the model reads the instruction and the PR description, then drives the app with a small
@@ -35,9 +35,7 @@ The agent never commits or comments.
 
 ```
 result.json     outcome (pass | fail | mixed | no_result) and one entry per claim
-media/          screenshots (.png) with the evidence outlined in red, one video per app session (.webm)
-                the video skips the time where nothing moves (a still window lasts 1 second at most)
-traces/         Playwright traces with the real timing (npx playwright show-trace <file>)
+media/          screenshots (.png) with the evidence outlined in red
 TASK.md         the task given to the model
 actions.log     every command the model ran on the app, with what the app answered
 steps.log       the same actions in plain words, with names instead of ids (shown in the comment)
@@ -48,20 +46,13 @@ agent.log       what the model thought, said and ran besides the app actions
 pi-session/     the whole conversation of the model (JSONL)
 ```
 
-The verdicts are the model's own judgement. The screenshot taken at the moment of each verdict, the
-video and `actions.log` are there so a person can check them.
+The verdicts are the model's own judgement. The screenshot taken at the moment of each verdict and
+`actions.log` are there so a person can check them.
 
 ## Screenshots
 
 - Each screenshot is taken in light and in dark theme (`themes: false` to turn that off).
-- Before/after: by default (`before-after: auto`) when the pull request changes `packages/renderer`
-  or `packages/ui`; `true` or `false` forces it. The commit the pull request starts from is built too, and a second app
-  runs next to the first. It is brought to the same page after every action and each screenshot is
-  taken on both, shown as a Before / After table. Both apps use the same container engine, so the
-  second app never repeats a click on a button whose name says it changes something (start, delete,
-  create, pull, install, ...); that is a guess from the name. Extensions and settings are not
-  shared between the two apps.
-- The comment job publishes 40 images per run at most (4 files per screenshot with both options on).
+- The comment job publishes 40 images per run at most (2 files per screenshot with both themes).
 
 ## Setup
 
@@ -116,7 +107,7 @@ node comment/dist/index.mjs --dry-run <result folder>   # print the comment, no 
 To run the whole agent action on your machine (macOS or Linux; needs `gh` logged in, Node 24, pnpm):
 
 ```sh
-bun run local 1234 "verify that I can install 3 extensions" [model] [--before-after | --no-before-after] [--no-themes] [--gist] [--repo=owner/name]
+bun run local 1234 "verify that I can install 3 extensions" [model] [--no-themes] [--gist] [--repo=owner/name]
 ```
 
 - The comment is written to `.local/rvp-out/comment.md`. It is never posted on the pull request.
@@ -127,7 +118,8 @@ It runs the `run:` steps of `agent/action.yml` in `.local/`, reuses the download
 the next run for the same PR, and prints the comment without posting it. Nothing is written to GitHub.
 If an Ollama is already listening on port 11434, that one is used (with its own model store) instead of the pinned one.
 
-To try the session tool alone, in a built Podman Desktop checkout:
+To try the session tool alone, in a built Podman Desktop checkout, with `agent-browser` on the PATH
+(or its path in `RVP_AB`):
 
 ```sh
 cp -R <rvp>/agent/kit rvp

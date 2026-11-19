@@ -88,8 +88,6 @@ test('screenshots of one shot are grouped in a table', async () => {
   expect(screenshots(['media/01-a-tab.png'], url).join('\n')).toBe('\n![a tab](media/01-a-tab.png)\n<sub>a tab</sub>');
   const themes = screenshots(['media/01-a-tab.png', 'media/01-a-tab.dark.png'], url).join('\n');
   expect(themes).toContain('| Light | Dark |\n|---|---|\n| ![a tab](media/01-a-tab.png) | ![a tab](media/01-a-tab.dark.png) |');
-  const all = screenshots(['media/01-a.png', 'media/01-a.dark.png', 'media/01-a.before.png', 'media/01-a.before.dark.png'], url).join('\n');
-  expect(all).toContain('| | Light | Dark |\n|---|---|---|\n| Before | ![a](media/01-a.before.png) | ![a](media/01-a.before.dark.png) |\n| After | ![a](media/01-a.png) | ![a](media/01-a.dark.png) |');
 });
 
 test('element ids are removed from the notes', async () => {

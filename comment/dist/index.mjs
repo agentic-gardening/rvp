@@ -88,7 +88,7 @@ function render(result, url, runUrl, actions, plan = "") {
     "",
     `> ${inline(result.instruction, 600)}`,
     "",
-    `Runner \`${inline(result.runner, 30)}\` · model \`${inline(result.model, 60)}\`${runUrl ? ` · [run, video and trace](${runUrl})` : ""}`
+    `Runner \`${inline(result.runner, 30)}\` · model \`${inline(result.model, 60)}\`${runUrl ? ` · [run and result folder](${runUrl})` : ""}`
   ];
   for (const c of result.checks) {
     out.push("", `### ${ICON[c.status]} ${inline(c.claim)}`);
@@ -111,23 +111,20 @@ function render(result, url, runUrl, actions, plan = "") {
 function screenshots(files, url) {
   const groups = new Map;
   for (const file of files) {
-    const [, stem, before, dark] = /^(.*?)(\.before)?(\.dark)?\.png$/.exec(basename(file)) ?? [];
+    const [, stem, dark] = /^(.*?)(\.dark)?\.png$/.exec(basename(file)) ?? [];
     if (!stem)
       continue;
-    groups.set(stem, { ...groups.get(stem), [`${before ? "Before" : "After"} ${dark ? "Dark" : "Light"}`]: file });
+    groups.set(stem, { ...groups.get(stem), [dark ? "Dark" : "Light"]: file });
   }
   const out = [];
   for (const [stem, group] of groups) {
     const caption = inline(stem.replace(/^\d+-/, "").replace(/-/g, " "));
-    const image = (key) => group[key] ? `![${caption}](${url(group[key])})` : "";
-    const rows = ["Before", "After"].filter((row) => group[`${row} Light`] || group[`${row} Dark`]);
-    const columns = ["Light", "Dark"].filter((column) => rows.some((row) => group[`${row} ${column}`]));
-    if (rows.length === 1 && columns.length === 1) {
-      out.push("", image(`${rows[0]} ${columns[0]}`), `<sub>${caption}</sub>`);
-      continue;
-    }
-    const label = rows.length > 1;
-    out.push("", `<sub>${caption}</sub>`, "", `|${label ? " |" : ""} ${columns.join(" | ")} |`, `|${label ? "---|" : ""}${columns.map(() => "---").join("|")}|`, ...rows.map((row) => `|${label ? ` ${row} |` : ""} ${columns.map((column) => image(`${row} ${column}`)).join(" | ")} |`));
+    const columns = ["Light", "Dark"].filter((column) => group[column]);
+    const image = (column) => `![${caption}](${url(group[column])})`;
+    if (columns.length === 1)
+      out.push("", image(columns[0]), `<sub>${caption}</sub>`);
+    else
+      out.push("", `<sub>${caption}</sub>`, "", `| ${columns.join(" | ")} |`, `|${columns.map(() => "---").join("|")}|`, `| ${columns.map(image).join(" | ")} |`);
   }
   return out;
 }

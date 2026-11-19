@@ -1,19 +1,18 @@
-// Drive a running Podman Desktop from the shell. Copied to <podman-desktop checkout>/rvp/pd.mjs
-// so it uses the checkout's own Playwright and Electron.
+// Drive a running Podman Desktop from the shell. Copied to <podman-desktop checkout>/rvp/pd.mjs: it
+// starts the Electron of that checkout and talks to it through agent-browser (on the PATH, or RVP_AB).
+// agent-browser does the browser work; this file decides what the model reads, which is what a run costs.
 //
-//   node rvp/pd.mjs serve [--base <checkout>] [extension-folder...]   start the app and keep it running (one per job)
-//       --base: also start the app built without the pull request; it follows the first one and every
-//       screenshot is taken on both (NN-name.png and NN-name.before.png)
+//   node rvp/pd.mjs serve [extension-folder...]   start the app and keep it running (one per job)
 //   node rvp/pd.mjs <command> [args...]           act on it; see HELP
-import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import { execFile, spawn } from 'node:child_process';
+import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const PORT = 47615;
-// element ids of the window tree: e12, or f1e12 after the window was reloaded
+// element ids of the window tree, as agent-browser gives them: e12
 const ID = /^(f\d+)?e\d+$/;
 const checkout = resolve(import.meta.dirname, '..');
 const out = process.env.RVP_OUT ?? join(import.meta.dirname, 'out');
@@ -54,12 +53,8 @@ async function client(command) {
 }
 
 async function serve(extensions) {
-  const baseAt = extensions.indexOf('--base');
-  const baseCheckout = baseAt < 0 ? undefined : resolve(extensions.splice(baseAt, 2)[1]);
-  const { _electron: electron } = await import('@playwright/test');
   const media = join(out, 'media');
   mkdirSync(media, { recursive: true });
-  mkdirSync(join(out, 'traces'), { recursive: true });
 
   const slug = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50);
   // The claims are the sentences of the instruction, numbered here: the model answers them by number.
@@ -70,132 +65,111 @@ async function serve(extensions) {
   const verdicts = new Map(); // claim number -> check
   const open = () => claims.map((_, i) => i + 1).filter(n => !verdicts.has(n));
   const left = () => (open().length ? `Open: ${open().map(n => `claim ${n}`).join(', ')}.` : 'All claims have a verdict: write rvp/notes.md and stop.');
-  let app, page, recorder, folders = [], session = 0, shots = 0, pending = [];
+  let app, alive = false, folders = [], shots = 0, pending = [];
   let refused; // the last verdict that was sent back to the model
   const lastChange = new Map(); // action -> what it changed in the window the last time
   let lost; // an answer nobody read: the model put a timeout on its command and was gone before the end
-  let hovered; // the last button hovered alone: its tooltip is watched again after the next clicks
   let sinceVerdict = 0; // commands since the last verdict: a small model can go in circles for an hour
-  let baseApp, basePage, snapshot = ''; // the app without the pull request, and the last tree of the PR app
-  const size = { width: 1280, height: 800 };
+  let snapshot = ''; // the last tree of the window
   // every screenshot is taken once per theme: NN-name.png (light) and NN-name.dark.png
   const themes = process.env.RVP_THEMES === 'false' ? [['', 'light']] : [['', 'light'], ['.dark', 'dark']];
 
-  /**
-   * Video without the time where nothing moves: frames go to Playwright's own ffmpeg, and a still
-   * frame is held one second at most. Returns undefined when that ffmpeg cannot be used.
-   */
-  function record(file) {
+  const sleep = ms => new Promise(done => setTimeout(done, ms));
+  const CDP = process.env.RVP_CDP_PORT ?? '9339';
+  /** One agent-browser command; its output, or an error of one line. */
+  const ab = (...args) =>
+    new Promise((done, fail) =>
+      execFile(
+        process.env.RVP_AB || 'agent-browser',
+        args,
+        { env: { ...process.env, AGENT_BROWSER_SESSION: 'rvp', AGENT_BROWSER_NO_VERSION_CHECK: '1' }, maxBuffer: 32e6, timeout: 40_000, windowsHide: true },
+        (error, stdout, stderr) => {
+          const text = String(stdout).trim();
+          if (!error && !text.startsWith('✗')) return done(text.replace(/^✓ Done$/, ''));
+          fail(new Error((text || String(stderr).trim() || error.message).replace(/^✗\s*/, '').split('\n')[0].slice(0, 200)));
+        },
+      ),
+    );
+  /** The value of a JavaScript expression in the window; undefined when it has none. */
+  const js = async code => {
     try {
-      const cache = process.env.PLAYWRIGHT_BROWSERS_PATH
-        ?? join(homedir(), { darwin: 'Library/Caches', win32: 'AppData/Local' }[process.platform] ?? '.cache', 'ms-playwright');
-      const revision = readdirSync(cache).filter(d => d.startsWith('ffmpeg-')).sort().at(-1);
-      const bin = join(cache, revision, readdirSync(join(cache, revision)).find(f => f.startsWith('ffmpeg')));
-      const codec = /libvpx[\w-]*/.exec(spawnSync(bin, ['-hide_banner', '-encoders'], { encoding: 'utf8' }).stdout)[0]; // vp8 or vp9, depends on the build
-      const ffmpeg = spawn(
-        bin,
-        ['-loglevel', 'error', '-f', 'image2pipe', '-c:v', 'mjpeg', '-framerate', '25', '-i', 'pipe:0', '-y', '-an',
-          '-c:v', codec, '-b:v', '1M', '-deadline', 'realtime', '-speed', '8', file],
-        { stdio: ['pipe', 'ignore', 'ignore'] },
-      );
-      ffmpeg.on('error', () => {});
-      ffmpeg.stdin.on('error', () => {});
-      const closed = new Promise(done => ffmpeg.on('close', done));
-      let last, clock = 0, written = 0;
-      // show `last` for `ms` of video time, at 25 frames a second (a frame shown less than 40 ms may be dropped)
-      const hold = ms => {
-        clock += ms;
-        for (; written < Math.floor(clock / 40); written++) ffmpeg.stdin.write(last.data);
-      };
-      return {
-        frame({ data, timestamp }) {
-          if (last) hold(Math.min(1000, timestamp - last.timestamp));
-          last = { data, timestamp };
-        },
-        async end() {
-          if (last) hold(1000);
-          ffmpeg.stdin.end();
-          await closed;
-        },
-      };
+      return JSON.parse(await ab('eval', code));
     } catch {
       return undefined;
     }
-  }
+  };
+  /** An action on one element. An id from an old view that agent-browser cannot find again is said in our words. */
+  const act = (verb, id, ...rest) =>
+    ab(verb, `@${id}`, ...rest).catch(error => {
+      throw new Error(/unknown ref|not found|no element/i.test(error.message) ? `there is no element ${id} in the window now. Run look again.` : error.message);
+    });
+  const boxOf = async id => {
+    const { data } = JSON.parse(await ab('get', 'box', `@${id}`, '--json'));
+    if (!data) throw new Error(`there is no element ${id} in the window now. Run look again.`);
+    return { x: data.x, y: data.y, width: data.width, height: data.height };
+  };
+  // The element of a box, for JavaScript in the page: the one whose rectangle it is. Not elementFromPoint,
+  // which never returns a disabled button. ponytail: two elements of the very same rectangle; the control wins.
+  const AT = box => `(b => { const all = [...document.querySelectorAll('*')].filter(el => { const r = el.getBoundingClientRect(); return Math.abs(r.x - b.x) < 1 && Math.abs(r.y - b.y) < 1 && Math.abs(r.width - b.width) < 1 && Math.abs(r.height - b.height) < 1; }); return all.find(el => el.matches('button,a,input,select,textarea,[role],[title]')) ?? all[0] ?? null; })(${JSON.stringify(box)})`;
 
-  /** Start the app built in `dir` with its own home, wait until it has a usable window. */
-  async function launch(dir) {
+  /** Start the app of this checkout with its own home, attach agent-browser, wait until the window is usable. */
+  async function launch() {
     const home = mkdtempSync(join(tmpdir(), 'rvp-home-'));
     mkdirSync(join(home, 'configuration'));
     writeFileSync(
       join(home, 'configuration', 'settings.json'),
       JSON.stringify({ 'preferences.OpenDevTools': 'none', 'extensions.autoUpdate': false, 'extensions.autoCheckUpdates': false }),
     );
-    const launched = await electron.launch({
-      executablePath: createRequire(join(dir, 'package.json'))('electron'), // the Electron of that checkout
+    const started = spawn(
+      createRequire(join(checkout, 'package.json'))('electron'), // the Electron of the checkout
       // own user-data dir: no single-instance clash with another Podman Desktop on the machine
-      args: ['.', `--user-data-dir=${join(home, 'user-data')}`, ...folders.flatMap(f => ['--extension-folder', resolve(f)])],
-      cwd: dir,
-      env: { ...process.env, PODMAN_DESKTOP_HOME_DIR: home, ...(process.platform === 'linux' ? { XDG_SESSION_TYPE: 'x11' } : {}) },
-      timeout: 120_000,
-    });
-    const window = await launched.firstWindow();
-    await loaded(window);
-    // the app follows the system theme: pin it, so a run looks the same on every machine
-    await window.emulateMedia({ colorScheme: 'light' });
-    return [launched, window];
-  }
-
-  // Playwright can attach during a navigation and the preload is lost (blank window): reload.
-  async function loaded(window) {
-    for (let i = 0; i < 3; i++) {
-      await window.waitForLoadState('domcontentloaded');
-      if (await window.evaluate(() => 'events' in window)) break;
-      await window.reload();
+      ['.', `--user-data-dir=${join(home, 'user-data')}`, `--remote-debugging-port=${CDP}`, ...folders.flatMap(f => ['--extension-folder', resolve(f)])],
+      { cwd: checkout, stdio: 'ignore', env: { ...process.env, PODMAN_DESKTOP_HOME_DIR: home, ...(process.platform === 'linux' ? { XDG_SESSION_TYPE: 'x11' } : {}) } },
+    );
+    started.on('error', () => {});
+    started.on('exit', () => started === app && (alive = false));
+    app = started;
+    alive = true;
+    for (let tries = 0; ; tries++) {
+      if (await ab('connect', CDP).then(() => true, () => false)) break;
+      if (tries > 120 || !alive) throw new Error('Podman Desktop did not start, or agent-browser could not attach to it.');
+      await sleep(1000);
     }
+    // the window exists before the app is loaded in it
+    for (let tries = 0; tries < 120 && !(await js(`'events' in window`)); tries++) await sleep(1000);
+    // the app follows the system theme: pin it, so a run looks the same on every machine
+    await ab('set', 'media', 'light');
   }
 
   // welcome screen: telemetry off, then skip
-  async function welcome(window) {
-    const skipWelcome = window.getByRole('button', { name: 'Skip', exact: true });
-    await skipWelcome.waitFor({ timeout: 90_000 });
-    await window.getByRole('checkbox', { name: 'Enable telemetry' }).uncheck({ force: true, timeout: 5000 }).catch(() => {});
-    await skipWelcome.click();
-    await skipWelcome.waitFor({ state: 'hidden', timeout: 15_000 });
+  async function welcome() {
+    const find = (lines, role, name) => lines.map(parse).find(p => p.id && p.role === role && name.test(p.name ?? ''));
+    let lines = [];
+    for (let tries = 0; tries < 90 && !find(lines, 'button', /^Skip$/); tries++) {
+      if (tries) await sleep(1000);
+      lines = (await tree()).split('\n');
+    }
+    const telemetry = find(lines, 'checkbox', /telemetry/i);
+    if (telemetry) await ab('uncheck', `@${telemetry.id}`).catch(() => {});
+    await ab('click', `@${find(lines, 'button', /^Skip$/).id}`);
+    for (let tries = 0; tries < 15 && find((await tree()).split('\n'), 'button', /^Skip$/); tries++) await sleep(1000);
   }
 
   async function start(extensionFolders) {
     folders = extensionFolders;
-    session++;
-    [app, page] = await launch(checkout);
-    await app.context().tracing.start({ screenshots: true, snapshots: true });
-    const video = join(media, `session-${session}.webm`);
-    recorder = record(video);
-    // ponytail: without Playwright's ffmpeg the video is recorded at real speed, idle time included
-    await page.screencast.start(recorder ? { onFrame: frame => recorder.frame(frame), size } : { path: video, size });
-    await page.screencast.showActions().catch(() => {}); // shows where each click lands
-    await welcome(page);
-    if (baseCheckout) {
-      [baseApp, basePage] = await launch(baseCheckout);
-      await welcome(basePage);
-    }
+    await launch();
+    await welcome();
   }
 
   async function stop() {
     if (!app) return;
-    await app.context().tracing.stop({ path: join(out, 'traces', `session-${session}.zip`) }).catch(() => {});
-    await page.screencast?.stop().catch(() => {});
-    await recorder?.end();
-    await app.close().catch(() => {});
-    await baseApp?.close().catch(() => {});
-    app = baseApp = basePage = undefined;
+    await ab('close').catch(() => {});
+    app.kill();
+    app = undefined;
+    alive = false;
   }
 
-  // --- the app without the pull request follows the other one ---
-  // Both apps use the same container engine: what one creates, the other one lists. So the base app
-  // must never repeat an action that changes something; it is only brought to the same view.
-
-  /** Role and name of an element of the PR app, read from its last tree: the only way to find "the same" element in the base app. */
+  /** Role and name of an element, read from the last tree. */
   const describe = id => {
     const [, role, name] = new RegExp(`- (\\w+)(?: "((?:[^"\\\\]|\\\\.)*)")?[^\\n]*\\[ref=${id}\\]`).exec(snapshot) ?? [];
     return role && name ? { role, name: name.replace(/\\(.)/g, '$1') } : undefined;
@@ -237,40 +211,29 @@ async function serve(extensions) {
     return undefined;
   };
 
-  const twin = async id => {
-    const found = describe(id);
-    const locator = found && basePage.getByRole(found.role, { name: found.name, exact: true }).first();
-    return locator && (await locator.count()) ? locator : undefined;
-  };
-  // ponytail: a button is taken as changing something when its name starts with one of these verbs.
-  // A wrong guess either leaves the base app on another view or repeats an action; an allowlist per page would be exact.
-  const CHANGES = /^(start|stop|restart|delete|remove|create|pull|build|push|run|deploy|install|uninstall|prune|save|import|export|load|apply|update|upgrade|rename|kill|pause|unpause|enable|disable|add|connect|disconnect|sign|log|init|set|reset|confirm|yes|ok|done|next|submit|upload|download|clone|copy|edit|play)/i;
-  const route = window => window.evaluate(() => JSON.stringify([sessionStorage.getItem('last-route'), sessionStorage.getItem('settings-page')]));
-
-  /** After an action on the PR app: do `replay` on the base app (a harmless action), then bring it to the same page. */
-  async function follow(replay) {
-    if (!basePage) return;
-    await replay?.().catch(() => {});
-    const wanted = await route(page);
-    if ((await route(basePage)) === wanted) return;
-    // the app restores these two entries when it reloads: its own "come back where I was"
-    await basePage.evaluate(saved => {
-      const [last, settings] = JSON.parse(saved);
-      for (const [key, value] of [['last-route', last], ['settings-page', settings]]) value ? sessionStorage.setItem(key, value) : sessionStorage.removeItem(key);
-    }, wanted);
-    await basePage.reload();
-    await loaded(basePage);
-    await basePage.waitForTimeout(1500);
-  }
-
-  /** The accessibility tree with an id on every element, minus the lines that carry no information. */
+  /**
+   * The accessibility tree of the window. agent-browser prints `- button "Pull" [disabled, ref=e7]` and
+   * `- StaticText "x"`; it is brought to one form here: `- button "Pull" [disabled] [ref=e7]`, `- text: x`.
+   * A checkbox always says its state, [on] or [off]: unchecked is as much a fact as checked.
+   */
   async function tree() {
-    snapshot = await page.ariaSnapshot({ mode: 'ai' });
-    return snapshot
+    snapshot = (await ab('snapshot'))
       .split('\n')
-      .filter(line => !/^\s*- \/url:/.test(line)) // every wrapper is kept: the nesting is read from the indentation
-      .map(line => line.replace(' [cursor=pointer]', '').replace(/\[ref=(\w+)\]/, '[id=$1]'))
+      .map(line => {
+        const [, pad, role, name, flags = ''] = /^(\s*)- (\w+)(?: "((?:[^"\\]|\\.)*)")?(?: \[([^\]]*)\])?/.exec(line) ?? [];
+        if (!role) return line;
+        if (role === 'StaticText') return `${pad}- text: ${name ?? ''}`;
+        const said = flags.split(', ').flatMap(flag => {
+          const [key, value] = flag.split('=');
+          if (key === 'ref') return [`[ref=${value}]`];
+          if (key === 'checked') return [value === 'true' ? '[on]' : value === 'false' ? '[off]' : '[partly on]'];
+          return key === 'disabled' || (value === 'true' && /^(expanded|pressed|selected)$/.test(key)) ? [`[${key}]`] : [];
+        });
+        // the ref last: the rest of the file reads a line as "what it is", then its id
+        return `${pad}- ${role}${name === undefined ? '' : ` "${name}"`}${[...said.filter(f => !f.startsWith('[ref=')), ...said.filter(f => f.startsWith('[ref='))].map(f => ` ${f}`).join('')}`;
+      })
       .join('\n');
+    return snapshot.replace(/\[ref=(\w+)\]/g, '[id=$1]');
   }
 
   /**
@@ -279,16 +242,15 @@ async function serve(extensions) {
    * ponytail: tied to Podman Desktop's class names; if they change, the tabs are just not reported.
    */
   async function where() {
-    const [last, settings] = JSON.parse(await route(page).catch(() => '[]'));
-    const { tabs, tips } = await page
-      .evaluate(() => ({
+    const { last, settings, tabs = [], tips = [] } =
+      (await js(`(() => ({
+        last: sessionStorage.getItem('last-route'),
+        settings: sessionStorage.getItem('settings-page'),
         tabs: [...document.querySelectorAll('button[class*="--pd-button-tab-border"], a[class*="--pd-tab-text"]')]
           .filter(el => el.offsetParent)
           .map(el => ({ name: (el.getAttribute('aria-label') ?? el.textContent).trim(), open: /--pd-button-tab-border-selected|--pd-tab-text-highlight/.test(el.className) })),
-        // a tooltip exists only while the mouse (or the focus) is on its element
         tips: [...document.querySelectorAll('[role="tooltip"]')].filter(el => el.getClientRects().length && el.textContent.trim()).map(el => el.textContent.trim()),
-      }))
-      .catch(() => ({ tabs: [], tips: [] }));
+      }))()`)) ?? {}; // a tooltip exists only while the mouse (or the focus) is on its element
     const line =
       // long pieces of an address are ids of an image or a container: their start is enough
       `You are on page ${(settings ?? last ?? '/').replace(/[^/]{25,}/g, piece => `${piece.slice(0, 12)}…`)}.` +
@@ -322,7 +284,9 @@ async function serve(extensions) {
       skip = -1;
       const p = parse(line);
       while (open.at(-1).depth >= indent(line)) open.pop(); // also for a line that is left out: what follows is not inside the previous one
-      if (!p.role || p.role === 'img' || p.role === 'separator' || !(p.name || p.text)) continue;
+      if (!p.role || p.role === 'img' || p.role === 'image' || p.role === 'separator' || !(p.name || p.text)) continue;
+      // the text of a thing that already says it: heading "Images" > text "Images"
+      if (p.role === 'text' && open.at(-1).name?.trim().toLowerCase() === p.text.trim().toLowerCase()) continue;
       if (brief && p.role === 'contentinfo') { skip = indent(line); continue; }
       // [level] and [active] (the keyboard focus) say nothing useful here; a long text is cut
       const shown = line.trim().replace(/ \[(level=\d+|active)\]/g, '').replace(/(: .{100}).+$/, '$1…');
@@ -438,7 +402,7 @@ async function serve(extensions) {
       if (block >= 0) parts.set(block, within(lines, block));
       else if (![...parts.keys()].some(start => start <= i && i < start + parts.get(start).length)) parts.set(Math.max(0, i - 3), lines.slice(Math.max(0, i - 3), i + 7));
     });
-    if (!parts.size && tries > 1) return (await page.waitForTimeout(1000), look(what, limit, tries - 1)); // it may still be loading
+    if (!parts.size && tries > 1) return (await sleep(1000), look(what, limit, tries - 1)); // it may still be loading
     if (!parts.size) return `${first}\n"${what}" is not in the window.${menus(lines)}`;
     return `${first}\n${cut([...parts.values()].flatMap(part => compact(part)), 3000, HINT)}`;
   }
@@ -465,68 +429,43 @@ async function serve(extensions) {
     return [found, args];
   };
 
-  const outline = locator => locator.evaluate(el => Object.assign(el.style, { outline: '3px solid red', outlineOffset: '-3px' })); // inside the element: a parent with overflow hidden cannot clip it
-  async function capture(window, stem, marked) {
-    for (const [suffix, colorScheme] of themes) {
-      await window.emulateMedia({ colorScheme });
-      if (suffix) await window.waitForTimeout(300); // let the app repaint in the other theme
-      await window.screenshot({ path: join(out, `${stem}${suffix}.png`) });
+  async function capture(stem) {
+    for (const [suffix, scheme] of themes) {
+      await ab('set', 'media', scheme);
+      if (suffix) await sleep(300); // let the app repaint in the other theme
+      await ab('screenshot', join(out, `${stem}${suffix}.png`));
       pending.push(`${stem}${suffix}.png`);
     }
-    await window.emulateMedia({ colorScheme: 'light' });
-    for (const locator of marked) await locator.evaluate(el => Object.assign(el.style, { outline: '', outlineOffset: '' })).catch(() => {});
+    await ab('set', 'media', 'light');
   }
 
   /**
-   * Screenshots of the window, one per theme, and the same on the app without the pull request,
-   * with the given elements outlined in red. Returns the first file and a note about ids that were not found.
+   * Screenshots of the window, one per theme, with the given elements outlined in red.
+   * Returns the first file and a note about ids that were not found.
    */
   async function shot(name, outlined = []) {
     const stem = `media/${String(++shots).padStart(2, '0')}-${slug(name)}`;
-    const marked = [], baseMarked = [], missing = [], notBefore = [];
+    const boxes = [], missing = [];
     for (const id of outlined) {
-      const locator = await element(id).catch(() => undefined);
-      if (!locator) { missing.push(id); continue; }
-      await locator.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {});
-      await outline(locator);
-      marked.push(locator);
-      if (!basePage) continue;
-      const same = await twin(id);
-      if (!same) { notBefore.push(id); continue; }
-      await same.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {});
-      await outline(same);
-      baseMarked.push(same);
+      await ab('scrollintoview', `@${id}`).catch(() => {});
+      const box = await boxOf(id).catch(() => undefined);
+      if (box) boxes.push(box);
+      else missing.push(id);
     }
-    await capture(page, stem, marked);
-    if (basePage) await capture(basePage, `${stem}.before`, baseMarked);
-    return [
-      `${stem}.png`,
-      (missing.length ? ` (no element ${missing.join(', ')} in the window now: not outlined)` : '') +
-        (notBefore.length ? ` (${notBefore.join(', ')} does not exist before the pull request)` : ''),
-    ];
+    // a frame drawn over the window where the element is: nothing of the app is restyled, and nothing can clip it.
+    // At least 14 pixels: the real checkbox of a switch is one hidden pixel.
+    if (boxes.length)
+      await js(`(${JSON.stringify(boxes)}).forEach(b => { const w = Math.max(b.width, 14), h = Math.max(b.height, 14); document.body.insertAdjacentHTML('beforeend', '<div class="rvp-outline" style="position:fixed;left:' + (b.x - (w - b.width) / 2) + 'px;top:' + (b.y - (h - b.height) / 2) + 'px;width:' + w + 'px;height:' + h + 'px;border:3px solid red;box-sizing:border-box;pointer-events:none;z-index:2147483647"></div>'); })`);
+    await capture(stem);
+    await js(`document.querySelectorAll('.rvp-outline').forEach(el => el.remove())`);
+    return [`${stem}.png`, missing.length ? ` (no element ${missing.join(', ')} in the window now: not outlined)` : ''];
   }
 
-  const element = async id => {
-    if (!ID.test(id ?? '')) throw new Error(`"${id}" is not an element id. Run look and use an id such as e12.`);
-    // Lists redraw their rows all the time and a redrawn element loses its id. So the element is found
-    // again by what the tree said about it (role, name, which one of them), and by its id only as a fallback.
-    const lines = snapshot.split('\n');
-    const i = lines.findIndex(line => line.includes(`[ref=${id}]`));
-    const { role, name } = i < 0 ? {} : parse(lines[i]);
-    if (name && role !== 'generic') {
-      const earlier = lines.slice(0, i).filter(line => parse(line).role === role && parse(line).name === name).length;
-      const again = page.getByRole(role, { name, exact: true }).nth(earlier);
-      if (await again.count().catch(() => 0)) return again;
-    }
-    const locator = page.locator(`aria-ref=${id}`);
-    if (!(await locator.count())) throw new Error(`there is no element ${id} in the window now. Run look again.`);
-    return locator;
-  };
   /** The element a command names: an id from look, or the visible name of something in the window. */
   async function target(words, click = false) {
     // a name and an id together ("Run Image e1259"): the id is what was meant
     const given = words.flatMap(word => word.split(' ')).find(word => ID.test(word)) ?? words.join(' ').trim().replace(/^"(.*)"$/, '$1');
-    if (ID.test(given)) return { id: given, locator: await element(given) };
+    if (ID.test(given)) return { id: given };
     if (!given) throw new Error('say what: a name such as "Images", or an id such as e12.');
     let lines, all;
     const read = async () => {
@@ -545,7 +484,7 @@ async function serve(extensions) {
     let found = [];
     // a list that is still loading: look again for a few seconds before saying it is not there
     for (let tries = 0; tries < 4 && !found.length; tries++) {
-      if (tries) await page.waitForTimeout(1000);
+      if (tries) await sleep(1000);
       await read();
       found = named(given);
       if (!found.length && rest) found = named(rest, role);
@@ -560,7 +499,7 @@ async function serve(extensions) {
       };
       throw new Error(`${found.length} elements are named "${given}". Use the id of the one you mean:\n${found.slice(0, 8).map(p => `  ${p.id}  ${p.role} "${p.name}"${place(p.i)}`).join('\n')}`);
     }
-    return { id: found[0].id, locator: await element(found[0].id) };
+    return { id: found[0].id };
   }
   /** The answer to an action: where the app is now, and only what changed in the window. */
   const after = async (done, before) => {
@@ -568,7 +507,7 @@ async function serve(extensions) {
     let now = await state();
     const settle = async () => {
       for (let tries = 0; tries < 8; tries++) {
-        await page.waitForTimeout(500);
+        await sleep(500);
         const next = await state();
         const same = next.length === now.length && next.every((line, i) => key(line) === key(now[i]));
         now = next;
@@ -581,7 +520,6 @@ async function serve(extensions) {
     const first = (await where()).line;
     // another page: what look would say, so that no second command is needed (a diff cut short hid the buttons)
     if (before.page !== address(first)) {
-      hovered = undefined;
       // without the navigation line (it never changes), and only the start of the tab's content: its buttons are above it
       const content = now.findIndex(line => line.startsWith('- region "Tab Content"'));
       const page = now.filter((line, i) => !line.startsWith('- navigation:') && (content < 0 || i <= content + 6));
@@ -627,22 +565,26 @@ async function serve(extensions) {
     lastChange.set(done, told);
     return `${done}\n${first}\n${same ? 'Same result as the last time you did this.' : body}`;
   };
-  const hoverOne = async locator => {
-    await locator.hover({ timeout: 10_000 });
-    await page.waitForTimeout(900); // tooltips appear after a delay
-    return locator.evaluate(el => {
-      const box = el.getBoundingClientRect();
-      const tip = [...document.querySelectorAll('[role="tooltip"]')].find(t => t.getClientRects().length && t.textContent.trim());
-      const at = tip?.getBoundingClientRect();
-      return {
-        title: el.getAttribute('title'),
-        disabled: el.disabled === true || el.getAttribute('aria-disabled') === 'true',
-        menu: el.hasAttribute('aria-haspopup'),
-        tip: tip?.textContent.trim(),
-        // where the tooltip is, from the two rectangles
-        side: !at ? '' : at.bottom <= box.top + 2 ? 'above' : at.top >= box.bottom - 2 ? 'below' : at.right <= box.left + 2 ? 'on the left of' : 'on the right of',
-      };
-    });
+  const hoverOne = async id => {
+    await act('hover', id);
+    await sleep(900); // tooltips appear after a delay
+    const box = await boxOf(id);
+    // the side of the tooltip comes from the two rectangles
+    return (
+      (await js(`(() => {
+        const box = ${JSON.stringify(box)};
+        const el = ${AT(box)};
+        const tip = [...document.querySelectorAll('[role="tooltip"]')].find(t => t.getClientRects().length && t.textContent.trim());
+        const at = tip?.getBoundingClientRect();
+        return {
+          title: el?.getAttribute('title') ?? null,
+          disabled: el?.disabled === true || el?.getAttribute('aria-disabled') === 'true',
+          menu: !!el?.hasAttribute('aria-haspopup'),
+          tip: tip?.textContent.trim() ?? null,
+          side: !at ? '' : at.bottom <= box.y + 2 ? 'above' : at.top >= box.y + box.height - 2 ? 'below' : at.right <= box.x + 2 ? 'on the left of' : 'on the right of',
+        };
+      })()`)) ?? {}
+    );
   };
   /** One sentence about the tooltip of a hovered element. A `title` is the browser's own tooltip: it is never in the window tree. */
   const tooltipOf = (seen, role) =>
@@ -653,100 +595,84 @@ async function serve(extensions) {
         : 'no tooltip: no styled one, and no title';
   /** Records what the tooltip says while an action runs: a text that lasts a moment is over before the next command. */
   const watchTooltip = () =>
-    page.evaluate(() => {
+    js(`(() => {
       const seen = [];
-      const read = () => [...document.querySelectorAll('[role="tooltip"]')].filter(t => t.getClientRects().length && t.textContent.trim()).map(t => `"${t.textContent.trim()}"`).join(', ') || 'gone';
+      const read = () => [...document.querySelectorAll('[role="tooltip"]')].filter(t => t.getClientRects().length && t.textContent.trim()).map(t => '"' + t.textContent.trim() + '"').join(', ') || 'gone';
       const timer = setInterval(() => seen.at(-1) !== read() && seen.push(read()), 50);
       globalThis.__rvpTooltip = () => (clearInterval(timer), seen);
-    });
-  const watchedTooltip = async (title = 'Tooltip during the click') => {
-    const seen = await page.evaluate(() => globalThis.__rvpTooltip?.() ?? []).catch(() => []);
-    return seen.length > 1 ? `${title}: ${seen.join(' → ')}` : '';
+      return true;
+    })()`);
+  const watchedTooltip = async () => {
+    const seen = (await js(`globalThis.__rvpTooltip?.() ?? []`)) ?? [];
+    return seen.length > 1 ? `Tooltip during the click: ${seen.join(' → ')}` : '';
   };
 
   const commands = {
     // `look cell e59`: the id is what was meant
     look: (...words) => look(words.find(word => ID.test(word)) ?? (words.join(' ') || undefined)),
     click: async (...words) => {
-      const { id, locator } = await target(words, true);
-      const [label, found, before] = [what(id), describe(id), await state()];
-      // only when the click is in a dialog: anywhere else the mouse must stay where it is (an open menu closes without it)
-      const inDialog = await locator.evaluate(el => !!el.closest('[role="dialog"],[role="alertdialog"]')).catch(() => false);
+      const { id } = await target(words, true);
+      const [label, before] = [what(id), await state()];
       await watchTooltip();
-      await locator.click({ timeout: 10_000 });
-      // A tooltip that changes once a dialog is confirmed ("Updating image"): the mouse left the hovered
-      // button for the dialog, so it is put back on it and its tooltip is watched while the app works.
-      let title;
-      // mouse.move, not hover(): hover() waits for the dialog to be gone, and a short update is over by then
-      const box = inDialog && hovered && hovered.label !== label && (await hovered.locator.boundingBox({ timeout: 500 }).catch(() => undefined));
-      if (box) {
-        title = `Tooltip of ${hovered.label} after the click`;
-        // moved again and again: the button gets the mouse only once the dialog over it is gone
-        for (let i = 0; i < 24; i++) {
-          if (!(await where()).tips.length) await page.mouse.move(box.x + box.width / 2 + (i % 2), box.y + box.height / 2);
-          await page.waitForTimeout(50);
-        }
-      }
-      // links and tabs only show another view; a button is repeated unless its name says it changes something
-      const harmless = found && (found.role !== 'button' || !CHANGES.test(found.name));
-      await follow(harmless ? async () => (await twin(id))?.click({ timeout: 5000 }) : undefined);
+      await act('click', id);
       const answer = await after(`clicked ${label}.`, before);
-      return [answer, await watchedTooltip(title)].filter(Boolean).join('\n');
+      return [answer, await watchedTooltip()].filter(Boolean).join('\n');
     },
     hover: async (...words) => {
-      const { id, locator } = await target(words);
+      const { id } = await target(words);
       const label = what(id);
       const lines = (await tree()).split('\n');
       const i = lines.findIndex(line => line.includes(`[id=${id}]`));
-      // on a row, a cell or a toolbar: every button in it, one line each
+      // on a cell or a toolbar: every button in it, one line each
       const inside = i < 0 || ACT.test(parse(lines[i]).role ?? '') ? [] : within(lines, i).slice(1).map(parse).filter(p => p.id && /^(button|link)$/.test(p.role)).slice(0, 12);
       if (inside.length) {
         const rows = [];
         for (const p of inside) {
-          const seen = await element(p.id).then(hoverOne).catch(() => undefined);
+          const seen = await hoverOne(p.id).catch(() => undefined);
           const twice = inside.filter(q => q.name === p.name).length > 1; // the id only tells apart two buttons with one name
           rows.push(`  ${p.role} "${p.name ?? ''}"${twice ? ` [id=${p.id}]` : ''}${seen?.disabled ? ' (disabled)' : ''}${seen?.menu ? ' (opens a menu)' : ''}: ${seen ? tooltipOf(seen, p.role) : 'could not be hovered'}`);
         }
         return `hovering ${label}: ${inside.length} buttons inside\n${rows.join('\n')}`;
       }
-      const seen = await hoverOne(locator);
-      hovered = { locator, label };
-      await follow(async () => (await twin(id))?.hover({ timeout: 5000 }));
+      const seen = await hoverOne(id);
       return `hovering ${label}${seen.disabled ? ' (disabled)' : ''}\n  ${tooltipOf(seen, describe(id)?.role ?? 'element')}`;
     },
     fill: async (first, ...text) => {
-      const { id, locator } = await target([first]);
+      const { id } = await target([first]);
       const [label, before] = [what(id), await state()];
-      await locator.fill(text.join(' '), { timeout: 10_000 });
-      await follow(async () => (await twin(id))?.fill(text.join(' '), { timeout: 5000 }));
+      await act('fill', id, text.join(' '));
       return after(`filled ${label}.`, before);
     },
     press: async key => {
       const before = await state();
-      await page.keyboard.press(key);
-      await follow(key === 'Enter' ? undefined : () => basePage.keyboard.press(key)); // Enter can submit a form
+      await ab('press', key);
       return after(`pressed ${key}.`, before);
     },
     eval: async (...args) => {
-      let [targets, js] = ids([...args]);
-      const code = js.join(' ');
-      const print = value => JSON.stringify(value)?.slice(0, 2000) ?? 'undefined';
+      let [targets, code] = ids([...args]);
+      code = code.join(' ');
+      const print = async expression => {
+        const text = await ab('eval', expression);
+        try {
+          return JSON.stringify(JSON.parse(text)).slice(0, 500); // on one line
+        } catch {
+          return text.slice(0, 500) || 'undefined';
+        }
+      };
       const known = id => snapshot.includes(`[ref=${id}]`);
       const refuse = id => new Error(`${id} is not an id in the page: ids exist only for these commands. Use: look ${id} (what is inside it), hover ${id} (its tooltip), or eval ${id} "el => el.getAttribute('title')"`);
       // `e561 => ...`: a function on that element, as small models write it
-      const [arrow, param] = /^\s*((?:f\d+)?e\d+)\s*=>/.exec(code) ?? [];
+      const [arrow, param] = /^\s*(e\d+)\s*=>/.exec(code) ?? [];
       if (!targets.length && param && known(param)) {
         if (new RegExp(`['"#=\\[]\\s*${param}\\b`).test(code.slice(arrow.length))) throw refuse(param);
         targets = [param];
       }
       if (targets.length) {
-        // the element is handed over through the page: the function then runs like any other expression
-        await (await element(targets[0])).evaluate(el => void (globalThis.__rvpElement = el));
-        return print(await page.evaluate(`(${code})(globalThis.__rvpElement)`));
+        return print(`(${code})(${AT(await boxOf(targets[0]))})`);
       }
-      const used = (code.match(/\b(?:f\d+)?e\d+\b/g) ?? []).find(known);
+      const used = (code.match(/\be\d+\b/g) ?? []).find(known);
       if (used) throw refuse(used);
-      return print(await page.evaluate(code));
+      return print(code);
     },
     shot: async (...args) => {
       const [outlined, name] = ids(args);
@@ -779,11 +705,13 @@ async function serve(extensions) {
   for (const [verb, status] of [['pass', 'passed'], ['fail', 'failed'], ['skip', 'skipped']]) {
     commands[verb] = async (...args) => {
       const command = JSON.stringify(args);
-      const [outlined, rest] = ids(args);
       // the number of the claim: 1, #1, "claim 1"; not needed when there is one claim
-      const at = rest.findIndex(word => /^(claim )?#?\d+[.:]?$/i.test(word.trim()));
-      const n = at >= 0 ? Number(/\d+/.exec(rest[at])[0]) : claims.length === 1 ? 1 : 0;
-      if (at >= 0) rest.splice(at, 1);
+      const words = [...args];
+      const at = words.findIndex(word => /^(claim )?#?\d+[.:]?$/i.test(word.trim()));
+      const n = at >= 0 ? Number(/\d+/.exec(words[at])[0]) : claims.length === 1 ? 1 : 0;
+      if (at >= 0) words.splice(at, 1);
+      // then the elements to outline: pass 1 e432 "what you saw" (the ids were lost when the number came first)
+      const [outlined, rest] = ids(words);
       if (!claims[n - 1]) throw new Error(`not recorded: say which claim, by its number: ${verb} 1 "<what you saw>". The claims:\n${await commands.claims()}`);
       const claim = claims[n - 1];
       // A verdict about a tab that is not the open one is sent back once; the same command again is accepted.
@@ -852,7 +780,7 @@ async function serve(extensions) {
           }
           if (!commands[name]) throw new Error(`unknown command "${name}". The commands are: ${Object.keys(commands).filter(c => c !== 'stop').join(', ')}. Example: node rvp/pd.mjs click "Images"`);
           let reopened = '';
-          if (page.isClosed() && name !== 'stop' && name !== 'restart') {
+          if (!alive && name !== 'stop' && name !== 'restart') {
             // the window was closed (by a person, or the app crashed): open a fresh one rather than fail every command
             await stop();
             await start(folders);

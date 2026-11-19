@@ -41,7 +41,7 @@ export function render(result: Result, url: (media: string) => string, runUrl: s
     '',
     `> ${inline(result.instruction, 600)}`,
     '',
-    `Runner \`${inline(result.runner, 30)}\` · model \`${inline(result.model, 60)}\`${runUrl ? ` · [run, video and trace](${runUrl})` : ''}`,
+    `Runner \`${inline(result.runner, 30)}\` · model \`${inline(result.model, 60)}\`${runUrl ? ` · [run and result folder](${runUrl})` : ''}`,
   ];
   for (const c of result.checks) {
     out.push('', `### ${ICON[c.status]} ${inline(c.claim)}`);
@@ -59,36 +59,21 @@ export function render(result: Result, url: (media: string) => string, runUrl: s
   return out.join('\n').slice(0, 60_000);
 }
 
-/**
- * One screenshot is up to four files: NN-what-it-shows[.before][.dark].png
- * (before = the app without the PR, dark = dark theme). They are shown together in one table.
- */
+/** One screenshot is one or two files: NN-what-it-shows[.dark].png (dark = dark theme), shown side by side. */
 export function screenshots(files: string[], url: (media: string) => string): string[] {
   const groups = new Map<string, Record<string, string>>();
   for (const file of files) {
-    const [, stem, before, dark] = /^(.*?)(\.before)?(\.dark)?\.png$/.exec(basename(file)) ?? [];
+    const [, stem, dark] = /^(.*?)(\.dark)?\.png$/.exec(basename(file)) ?? [];
     if (!stem) continue;
-    groups.set(stem, { ...groups.get(stem), [`${before ? 'Before' : 'After'} ${dark ? 'Dark' : 'Light'}`]: file });
+    groups.set(stem, { ...groups.get(stem), [dark ? 'Dark' : 'Light']: file });
   }
   const out: string[] = [];
   for (const [stem, group] of groups) {
     const caption = inline(stem.replace(/^\d+-/, '').replace(/-/g, ' '));
-    const image = (key: string): string => (group[key] ? `![${caption}](${url(group[key])})` : '');
-    const rows = ['Before', 'After'].filter(row => group[`${row} Light`] || group[`${row} Dark`]);
-    const columns = ['Light', 'Dark'].filter(column => rows.some(row => group[`${row} ${column}`]));
-    if (rows.length === 1 && columns.length === 1) {
-      out.push('', image(`${rows[0]} ${columns[0]}`), `<sub>${caption}</sub>`);
-      continue;
-    }
-    const label = rows.length > 1;
-    out.push(
-      '',
-      `<sub>${caption}</sub>`,
-      '',
-      `|${label ? ' |' : ''} ${columns.join(' | ')} |`,
-      `|${label ? '---|' : ''}${columns.map(() => '---').join('|')}|`,
-      ...rows.map(row => `|${label ? ` ${row} |` : ''} ${columns.map(column => image(`${row} ${column}`)).join(' | ')} |`),
-    );
+    const columns = ['Light', 'Dark'].filter(column => group[column]);
+    const image = (column: string): string => `![${caption}](${url(group[column])})`;
+    if (columns.length === 1) out.push('', image(columns[0]), `<sub>${caption}</sub>`);
+    else out.push('', `<sub>${caption}</sub>`, '', `| ${columns.join(' | ')} |`, `|${columns.map(() => '---').join('|')}|`, `| ${columns.map(image).join(' | ')} |`);
   }
   return out;
 }
