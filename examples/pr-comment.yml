@@ -2,10 +2,9 @@
 # want to verify. Then comment on a pull request:
 #
 #   /rvp check that the search field of the Local extensions tab is below the tabs
-#   /rvp macos check that ...          (linux by default; windows and macos also work)
-#   /rvp arm check that ...            (Linux on arm64)
+#   /rvp macos check that ...          (linux on arm64 by default; x64, windows and macos also work)
 #   /rvp model=qwen3.5:4b check that ...   (another Ollama model; can be combined with the runner)
-#   /rvp thinking=medium check that ...   (how much the model reasons before each command: off, minimal, low, medium, high, xhigh, max; low by default)
+#   /rvp thinking=medium check that ...   (how much the model reasons before each command: off, minimal, low, medium, high, xhigh, max; max by default)
 #
 # The result comes back as a comment on the same pull request.
 #
@@ -47,11 +46,12 @@ jobs:
           [[ "$BODY" =~ ^/rvp[[:space:]] ]] || { echo "not an rvp command"; exit 1; }
           # one line, so it cannot add other outputs
           text=$(printf '%s' "${BODY#/rvp}" | tr '\r\n\t' '   ' | sed -e 's/^ *//' -e 's/ *$//')
-          runner=linux model= thinking=low
+          runner=linux model= thinking=max
           # options come first, in any order; the rest is the instruction
           while :; do
             case "$text" in
-              linux\ * | arm\ * | windows\ * | macos\ *) runner=${text%% *} ;;
+              linux\ * | x64\ * | windows\ * | macos\ *) runner=${text%% *} ;;
+              arm\ *) runner=linux ;; # the old name of the default
               thinking=*\ *) thinking=${text%% *} thinking=${thinking#thinking=} ;;
               model=*\ *) model=${text%% *} model=${model#model=} ;;
               *) break ;;
@@ -68,7 +68,7 @@ jobs:
   # Runs the pull request's code and a model: no secret, read-only token.
   agent:
     needs: parse
-    runs-on: ${{ fromJSON('{"linux":"ubuntu-26.04","arm":"ubuntu-26.04-arm","windows":"windows-2025","macos":"macos-26"}')[needs.parse.outputs.runner] }}
+    runs-on: ${{ fromJSON('{"linux":"ubuntu-26.04-arm","x64":"ubuntu-26.04","windows":"windows-2025","macos":"macos-26"}')[needs.parse.outputs.runner] }}
     timeout-minutes: 240
     permissions:
       contents: read

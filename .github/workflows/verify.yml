@@ -15,7 +15,7 @@ on:
       runner:
         description: Where to run
         type: choice
-        options: [linux, arm, windows, macos]
+        options: [linux, x64, windows, macos]
         default: linux
       repo:
         description: Repository of the pull request
@@ -29,7 +29,7 @@ on:
         description: How much the model reasons before each command
         type: choice
         options: ['off', minimal, low, medium, high, xhigh, max]
-        default: low
+        default: max
       timeout-minutes:
         description: Time the model may spend
         type: string
@@ -44,7 +44,7 @@ permissions: {}
 jobs:
   # Runs PR code and a model: no secret, read-only token.
   agent:
-    runs-on: ${{ fromJSON('{"linux":"ubuntu-26.04","arm":"ubuntu-26.04-arm","windows":"windows-2025","macos":"macos-26"}')[inputs.runner] }}
+    runs-on: ${{ fromJSON('{"linux":"ubuntu-26.04-arm","x64":"ubuntu-26.04","windows":"windows-2025","macos":"macos-26"}')[inputs.runner] }}
     timeout-minutes: 240 # hard stop; the model's own budget is inputs.timeout-minutes
     permissions:
       contents: read
