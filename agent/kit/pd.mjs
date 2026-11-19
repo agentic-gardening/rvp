@@ -99,14 +99,26 @@ async function serve(extensions) {
       return undefined;
     }
   };
+  // what each id printed so far was, and on which page: an id used on another page is answered with that
+  const known = new Map();
+  let page = '/';
+  const remember = () => {
+    for (const [, what, id] of snapshot.matchAll(/^\s*- (\w+(?: "(?:[^"\\]|\\.)*")?).*\[ref=(\w+)\]/gm)) known.set(id, { what: what.slice(0, 70), page });
+  };
+  const gone = id => {
+    const was = known.get(id);
+    return was && was.page !== page
+      ? `${id} was ${was.what} on ${was.page}; you are on ${page}. Open that page first.`
+      : `there is no element ${id} in the window now. Run look again.`;
+  };
   /** An action on one element. An id from an old view that agent-browser cannot find again is said in our words. */
   const act = (verb, id, ...rest) =>
     ab(verb, `@${id}`, ...rest).catch(error => {
-      throw new Error(/unknown ref|not found|no element/i.test(error.message) ? `there is no element ${id} in the window now. Run look again.` : error.message);
+      throw new Error(/unknown ref|not found|no element/i.test(error.message) ? gone(id) : error.message);
     });
   const boxOf = async id => {
     const { data } = JSON.parse(await ab('get', 'box', `@${id}`, '--json'));
-    if (!data) throw new Error(`there is no element ${id} in the window now. Run look again.`);
+    if (!data) throw new Error(gone(id));
     return { x: data.x, y: data.y, width: data.width, height: data.height };
   };
   // The element of a box, for JavaScript in the page: the one whose rectangle it is. Not elementFromPoint,
@@ -210,10 +222,11 @@ async function serve(extensions) {
     if (name === 'eval' && on) return `run on ${on}: ${rest.join(' ').slice(0, 120)}`;
     if (name === 'fill') return on ? `type "${rest.join(' ')}" into ${on}` : `type "${args.slice(1).join(' ')}" into "${args[0]}"`;
     if (name === 'press') return `press ${args[0]}`;
+    if (name === 'size') return `screenshots at window sizes ${args.join(' ') || '800x600, 1280x800, 1920x1080'}`;
     if (name === 'eval') return `run in the page: ${args.join(' ').slice(0, 120)}`;
     if (name === 'shot') return `screenshot${on ? ` of ${on}` : ''}: ${readable(rest.join(' '))}`;
     if (name === 'restart') return `restart the app${args.length ? ` with ${args.length} local extension(s)` : ''}`;
-    if (['pass', 'fail', 'skip'].includes(name)) return `${{ pass: 'passed', fail: 'failed', skip: 'skipped' }[name]}: ${readable(rest.join(' '))}`;
+    if (['pass', 'fail', 'skip'].includes(name)) return `${{ pass: 'passed', fail: 'failed', skip: 'skipped' }[name]}: ${readable(rest.join(' ').replace(/^\d+\s+/, ''))}`;
     return undefined;
   };
 
@@ -239,6 +252,7 @@ async function serve(extensions) {
         return `${pad}- ${role}${name === undefined ? '' : ` "${name}"`}${[...said.filter(f => !f.startsWith('[ref=')), ...said.filter(f => f.startsWith('[ref='))].map(f => ` ${f}`).join('')}`;
       })
       .join('\n');
+    remember();
     return snapshot.replace(/\[ref=(\w+)\]/g, '[id=$1]');
   }
 
@@ -257,6 +271,8 @@ async function serve(extensions) {
           .map(el => ({ name: (el.getAttribute('aria-label') ?? el.textContent).trim(), open: /--pd-button-tab-border-selected|--pd-tab-text-highlight/.test(el.className) })),
         tips: [...document.querySelectorAll('[role="tooltip"]')].filter(el => el.getClientRects().length && el.textContent.trim()).map(el => el.textContent.trim()),
       }))()`)) ?? {}; // a tooltip exists only while the mouse (or the focus) is on its element
+    page = settings ?? last ?? '/';
+    remember();
     const line =
       // long pieces of an address are ids of an image or a container: their start is enough
       `You are on page ${(settings ?? last ?? '/').replace(/[^/]{25,}/g, piece => `${piece.slice(0, 12)}…`)}.` +
@@ -787,14 +803,53 @@ async function serve(extensions) {
       await shot(readable(name.join(' ')) || 'screenshot', outlined);
       return `Screenshots are taken for you at each verdict. Nothing was clicked.${outlined[0] ? ` To click it: click ${outlined[0]}` : ''}`;
     },
-    size: async (w, h) => {
-      const [width, height] = [Number(w), Number(h)];
-      if (!(width >= 400 && width <= 2560 && height >= 300 && height <= 1600))
-        throw new Error('not done: size <width> <height>, for example size 800 600');
-      await ab('set', 'viewport', String(width), String(height));
-      await sleep(500); // let the app lay itself out again
-      await capture(`media/${String(++shots).padStart(2, '0')}-${slug(`size ${width}x${height}`)}`);
-      return `window is now ${width}x${height}, screenshot taken.\n${(await look()).split('\n')[0]}`;
+    size: async (...args) => {
+      const words = args.flatMap(a => (/^\d+x\d+$/i.test(a) ? a.toLowerCase().split('x') : [a]));
+      const numbers = words.filter(w => /^\d+$/.test(w)).map(Number);
+      const sizes = [];
+      for (let i = 0; i < numbers.length; i += 2) sizes.push([numbers[i], numbers[i + 1]]);
+      if (!sizes.length) sizes.push([800, 600], [1280, 800], [1920, 1080]);
+      if (sizes.some(([w, h]) => !(w >= 400 && w <= 2560 && h >= 300 && h <= 1600)))
+        throw new Error('not done: size, or size <width> <height>, for example size 800 600');
+      const label =
+        readable(words.filter(w => !/^\d+$/.test(w)).join(' ')) ||
+        ((await js(`(document.querySelector('h1, [role="heading"]')?.textContent ?? '').trim().slice(0, 40)`)) || `page ${page}`);
+      const before = await js('[innerWidth, innerHeight]');
+      const facts = [];
+      for (const [w, h] of sizes) {
+        await ab('set', 'viewport', String(w), String(h));
+        await sleep(500); // let the app lay itself out again
+        // what a text or a named control loses on its right side, to the window or to the box that clips it
+        const cut =
+          (await js(`(() => {
+            const clips = new Map();
+            const clip = el => {
+              if (!el) return innerWidth;
+              if (!clips.has(el)) clips.set(el, Math.min(clip(el.parentElement), getComputedStyle(el).overflowX === 'visible' ? Infinity : el.getBoundingClientRect().right));
+              return clips.get(el);
+            };
+            const found = new Map();
+            for (const el of document.body.querySelectorAll('*')) {
+              const name = (el.getAttribute('aria-label') ?? [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join(' ')).trim().slice(0, 40);
+              if (!name || !el.getClientRects().length) continue;
+              const r = el.getBoundingClientRect(), edge = clip(el.parentElement);
+              if (r.width && r.left < edge && r.right > edge + 2 && !found.has(name)) found.set(name, [Math.round(r.right - edge), edge < innerWidth - 2]);
+            }
+            return [...found].map(([name, [by, boxed]]) => [name, by, boxed]);
+          })()`)) ?? [];
+        // a strip of cards that scrolls sideways always hides its last card: said apart from what the window cuts
+        const list = items => `${items.slice(0, 3).map(([name, by]) => `"${name}" (by ${by} px)`).join(', ')}${items.length > 3 ? `, and ${items.length - 3} more` : ''}`;
+        const [windowCut, boxCut] = [cut.filter(c => !c[2]), cut.filter(c => c[2])];
+        facts.push(
+          `${w}x${h}: ${windowCut.length ? `cut off by the right edge of the window: ${list(windowCut)}` : 'nothing is cut off by the window'}` +
+            (boxCut.length ? `; partly hidden inside a box that scrolls sideways or clips: ${list(boxCut)}` : ''),
+        );
+        await capture(`media/${String(++shots).padStart(2, '0')}-${slug(`${label} at ${w}x${h}`)}`);
+      }
+      // back to the size the window had: the next claim is not checked at the last size by accident
+      if (before) await ab('set', 'viewport', String(before[0]), String(before[1]));
+      const n = open()[0];
+      return `${(await look()).split('\n')[0]}\n${facts.join('\n')}\nScreenshots taken ("${label}").${n ? ` Give the verdict now: pass ${n} "..." or fail ${n} "..."` : ''}`;
     },
     restart: async (...folders) => (await stop(), await start(folders), `restarted with ${folders.length} extension folder(s).`),
     stop: async () => (await stop(), setTimeout(() => process.exit(0), 100), 'stopped.'),
@@ -851,7 +906,10 @@ async function serve(extensions) {
         const missing = (claim.match(/"[^"]{3,}"/g) ?? []).map(q => q.slice(1, -1)).find(q => !said.includes(q.toLowerCase()));
         const words = text => new Set(text.toLowerCase().match(/[a-z0-9]{3,}/g) ?? []);
         const [mine, theirs] = [words(rest.join(' ')), words(claim)];
-        const parrot = mine.size > 0 && [...mine].filter(w => theirs.has(w)).length >= 0.8 * mine.size;
+        // words of the claim are fine when an answer printed them too: four words in a row of the reason, as printed
+        const told = rest.join(' ').toLowerCase().split(/\s+/);
+        const quoted = told.some((_, i) => i + 4 <= told.length && said.includes(told.slice(i, i + 4).join(' ')));
+        const parrot = !quoted && mine.size > 0 && [...mine].filter(w => theirs.has(w)).length >= 0.8 * mine.size;
         if (missing || parrot || !mine.size) {
           refused = command;
           throw new Error(

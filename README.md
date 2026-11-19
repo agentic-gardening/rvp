@@ -13,7 +13,9 @@ gh workflow run verify.yml \
 
 Writing the instruction: name the place the way the app does ("the Local extensions tab of the
 Extensions page") and state one fact that can be checked per sentence. A small model does what the
-sentence says, not what you meant.
+sentence says, not what you meant. "Verify the dashboard in different resolutions" has nothing
+that can be true or false; "With the Enhanced dashboard setting on, nothing on the Dashboard is cut
+off at 800x600, 1280x800 and 1920x1080" has.
 
 ## What happens
 
