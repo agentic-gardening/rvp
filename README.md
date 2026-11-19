@@ -9,7 +9,8 @@ gh workflow run verify.yml \
   -f instruction="verify that I can install 3 extensions"
 ```
 
-`runner` is `linux`, `windows` or `macos`.
+`runner` is `linux`, `arm` (Linux on arm64), `windows` or `macos`. `-f thinking=low` lets the model
+reason before each command (slower); the run summary says how fast the model was.
 
 Writing the instruction: name the place the way the app does ("the Local extensions tab of the
 Extensions page") and state one fact that can be checked per sentence. A small model does what the
@@ -64,8 +65,8 @@ The verdicts are the model's own judgement. The screenshot taken at the moment o
 ## Triggering it with a pull request comment
 
 `examples/pr-comment.yml` starts a run when someone who can push to the repository comments
-`/rvp <what to check>` on a pull request (`/rvp macos model=qwen3.5:4b <what to check>` to pick the
-runner and the model), and
+`/rvp <what to check>` on a pull request (`/rvp macos model=qwen3.5:4b thinking=low <what to check>`
+to pick the runner, the model and its reasoning), and
 posts the result on that pull request. To use it:
 
 1. Copy it to `.github/workflows/rvp.yml` on the default branch of the repository to verify, and

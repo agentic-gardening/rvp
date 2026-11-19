@@ -20,6 +20,9 @@ inputs:
   themes:
     description: Take every screenshot in light and in dark theme
     default: 'true'
+  thinking:
+    description: How much the model reasons before each command (off, minimal, low, medium, high). More is slower.
+    default: 'off'
   token:
     description: Read-only token, used once to read the PR title and body
     default: ${{ github.token }}
@@ -40,7 +43,9 @@ runs:
         REPO: ${{ inputs.repo }}
         MODEL: ${{ inputs.model }}
         MINUTES: ${{ inputs.timeout-minutes }}
+        THINKING: ${{ inputs.thinking }}
       run: |
+        [[ "$THINKING" =~ ^(off|minimal|low|medium|high)$ ]] || { echo "thinking must be off, minimal, low, medium or high"; exit 1; }
         [[ "$PR" =~ ^[0-9]+$ && "$MINUTES" =~ ^[0-9]+$ ]] || { echo "pr and timeout-minutes must be numbers"; exit 1; }
         [[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "bad repo"; exit 1; }
         [[ "$MODEL" =~ ^[A-Za-z0-9._/-]+(:[A-Za-z0-9._-]+)?$ ]] || { echo "bad model"; exit 1; }
@@ -61,14 +66,17 @@ runs:
       shell: bash
       run: |
         # pinned release assets: name and sha256
-        case "$RUNNER_OS" in
-          Linux)   O=ollama-linux-amd64.tar.zst   OS=87bfafb2acbc89b2e6a1be0a9043de6aa75fb450696f86bc426e65fc448f788d
+        case "$RUNNER_OS-$RUNNER_ARCH" in
+          Linux-ARM64) O=ollama-linux-arm64.tar.zst OS=e45b8e6dcb86cb9f3057396351655079c9a4879b4ced2678c9350d375dcbc224
+                   C=pi-linux-arm64.tar.gz        CS=42805cd5615952fcbbfc9c56b04f8feb84395134952e169a6cdc8d7676975666
+                   A=agent-browser-linux-arm64    AS=34be55c2b92d8d199fb9d1d62a905ee5b6ac5b1f3e8c24e5b20597f370d905e5 ;;
+          Linux-*) O=ollama-linux-amd64.tar.zst   OS=87bfafb2acbc89b2e6a1be0a9043de6aa75fb450696f86bc426e65fc448f788d
                    C=pi-linux-x64.tar.gz          CS=811c6f2c9e7aaee252b5404252e556fb713aa209c1f7f924226aa77d4ef70cb5
                    A=agent-browser-linux-x64      AS=8e69c9fb662514c9cf36e4911e94e913742ba066e55102486350e049dd847612 ;;
-          macOS)   O=ollama-darwin.tgz            OS=a743717494315da7cd352982b805f6b992d4b4452ca117fd5fbf86c4ee46fca0
+          macOS-*) O=ollama-darwin.tgz            OS=a743717494315da7cd352982b805f6b992d4b4452ca117fd5fbf86c4ee46fca0
                    C=pi-darwin-arm64.tar.gz       CS=56b5e194d485ced555667b8ba3276157a8272e9ecde9e001e428af80985bdd9b
                    A=agent-browser-darwin-arm64   AS=05338a8eeddf0b3f9ebf0c87a6c21aedc10685608c68618e1a8483c43eae9c3f ;;
-          Windows) O=ollama-windows-amd64.zip     OS=50fcf5ad54277f2fa5d173ebfc93bcb017adbc0c9ef2314daabc96ca9e6aa64e
+          Windows-*) O=ollama-windows-amd64.zip     OS=50fcf5ad54277f2fa5d173ebfc93bcb017adbc0c9ef2314daabc96ca9e6aa64e
                    C=pi-windows-x64.zip           CS=e6adb8cb8c84eca14391ad24b363de9d2be98a89ca3ba3fdee1fa4de32b7f2e8
                    A=agent-browser-win32-x64.exe  AS=ebcef5ebea93c7ccf0fe3f8c18eee908ae9174dfef8e52a3dda6f24a59f630dc ;;
         esac
@@ -260,6 +268,7 @@ runs:
       env:
         MODEL: ${{ inputs.model }}
         MINUTES: ${{ inputs.timeout-minutes }}
+        RVP_THINKING: ${{ inputs.thinking }}
         PI_TELEMETRY: '0'
       run: |
         export PI_CODING_AGENT_DIR="$RUNNER_TEMP/pi"
@@ -297,7 +306,7 @@ runs:
       env:
         RVP_PR: ${{ inputs.pr }}
         RVP_REPO: ${{ inputs.repo }}
-        RVP_RUNNER: ${{ runner.os }}
+        RVP_RUNNER: ${{ runner.os }}${{ runner.arch == 'ARM64' && ' arm64' || '' }}
         RVP_MODEL: ${{ inputs.model }}
         RVP_INSTRUCTION: ${{ inputs.instruction }}
       run: |
@@ -307,6 +316,10 @@ runs:
           [ -f pd/rvp/notes.md ] && cp pd/rvp/notes.md "$RVP_OUT/notes.md"
         fi
         node "$GITHUB_ACTION_PATH/dist/result.mjs" "$RVP_OUT"
+        # how fast the model was on this runner, to compare runners and models
+        awk '/prompt eval time =/ { rms += $(NF-13); rt += $(NF-10) } / eval time =/ && !/prompt/ { wms += $(NF-13); wt += $(NF-10) }
+             END { if (rms && wms) printf "Model speed: read %.0f tokens/s, wrote %.1f tokens/s (%d tokens written in %d min).\n", rt * 1000 / rms, wt * 1000 / wms, wt, wms / 60000 }' \
+          "$RVP_OUT/ollama.log" 2> /dev/null | tee -a "$GITHUB_STEP_SUMMARY" "$RVP_OUT/speed.txt" || true
         # the run's Summary page: the comment without its images
         node "$GITHUB_ACTION_PATH/../comment/dist/index.mjs" --dry-run "$RVP_OUT" | grep -vE '\]\(media/|^\|' >> "$GITHUB_STEP_SUMMARY" || true
 
