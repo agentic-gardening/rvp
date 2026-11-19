@@ -25,7 +25,7 @@ jobs:
       github.event.issue.pull_request &&
       startsWith(github.event.comment.body, '/rvp') &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       pull-requests: write # the reaction on the comment
@@ -63,7 +63,7 @@ jobs:
   # Runs the pull request's code and a model: no secret, read-only token.
   agent:
     needs: parse
-    runs-on: ${{ fromJSON('{"linux":"ubuntu-24.04","windows":"windows-2025","macos":"macos-26"}')[needs.parse.outputs.runner] }}
+    runs-on: ${{ fromJSON('{"linux":"ubuntu-26.04","windows":"windows-2025","macos":"macos-26"}')[needs.parse.outputs.runner] }}
     timeout-minutes: 240
     permissions:
       contents: read
@@ -79,7 +79,7 @@ jobs:
   comment:
     needs: agent
     if: ${{ !cancelled() && needs.agent.result != 'skipped' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: write # screenshots are committed to the `media` branch of this repository

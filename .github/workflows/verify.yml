@@ -39,7 +39,7 @@ permissions: {}
 jobs:
   # Runs PR code and a model: no secret, read-only token.
   agent:
-    runs-on: ${{ fromJSON('{"linux":"ubuntu-24.04","windows":"windows-2025","macos":"macos-26"}')[inputs.runner] }}
+    runs-on: ${{ fromJSON('{"linux":"ubuntu-26.04","windows":"windows-2025","macos":"macos-26"}')[inputs.runner] }}
     timeout-minutes: 240 # hard stop; the model's own budget is inputs.timeout-minutes
     permissions:
       contents: read
@@ -61,7 +61,7 @@ jobs:
   comment:
     needs: agent
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: write # screenshots are committed to the `media` branch
