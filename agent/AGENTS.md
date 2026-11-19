@@ -17,6 +17,7 @@ node rvp/pd.mjs pass 1 e432 "what you saw"    claim 1 is true (e432: the element
 node rvp/pd.mjs fail 1 e432 "what you saw instead"   claim 1 is false: the app does not do it
 node rvp/pd.mjs skip 1 "why"                  claim 1 could not be checked
 node rvp/pd.mjs eval e432 "el => el.title"   JavaScript on one element
+node rvp/pd.mjs extension-json "Kind"     the package.json of an extension (what it contributes)
 ```
 
 ## What the answers look like
@@ -62,8 +63,8 @@ You are on page /images. Tabs here: [Summary] (open), History.
    says it is the open one. Something similar elsewhere proves nothing.
 3. As soon as you saw what the claim says, or saw that the app does something else, give the
    verdict **before anything else**: `pass`, `fail` or `skip` with the number of the claim.
-   Two failed attempts: `skip`, saying what you tried. A claim without a verdict after 25
-   commands or 20 minutes is closed as skipped for you.
+   Two failed attempts: `skip`, saying what you tried. A claim without a verdict after 40
+   commands or 30 minutes is closed as skipped for you.
 4. A verdict sent again for the same number replaces the first one: correct a mistake that way.
 5. Every answer ends with the claims still open. When none is left, write `rvp/notes.md` (three
    to ten lines) and stop.

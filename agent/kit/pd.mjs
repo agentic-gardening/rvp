@@ -904,7 +904,7 @@ async function serve(extensions) {
   // The model is not waited for: a claim that used its commands or its minutes is closed here, with a
   // screenshot of the window as it is. A run always ends with a report, whatever the model does.
   // 20: at one command a minute, 12 closed a claim the moment the model reached the page that proves it
-  const MINUTES = Number(process.env.RVP_CLAIM_MINUTES) || 20;
+  const MINUTES = Number(process.env.RVP_CLAIM_MINUTES) || 30;
   let said = ''; // every answer so far, to check a pass against what the model was really told
   let since; // when the work on the current claim started (its first action on the app)
   const giveUp = async why => {
@@ -1001,7 +1001,7 @@ async function serve(extensions) {
           const verdict = ['pass', 'fail', 'skip', 'stop', 'restart', 'claims'].includes(name);
           if (['click', 'hover', 'fill', 'press'].includes(name)) since ??= Date.now();
           if (open().length && !verdict) {
-            if (sinceVerdict >= (verdicts.size ? 15 : 25)) closed = await giveUp(`after ${sinceVerdict} commands`);
+            if (sinceVerdict >= (verdicts.size ? 15 : 40)) closed = await giveUp(`after ${sinceVerdict} commands`);
             else if (since && Date.now() - since > MINUTES * 60_000) closed = await giveUp(`after ${MINUTES} minutes`);
           }
           if (!commands[name]) throw new Error(`unknown command "${name}". The commands are: ${Object.keys(commands).filter(c => c !== 'stop').join(', ')}. Example: node rvp/pd.mjs click "Images"`);
@@ -1020,10 +1020,10 @@ async function serve(extensions) {
         if (lost && name !== 'stop') text = `Your previous command (${lost.command}) was done; its answer, which your timeout cut:\n${lost.text}\n\nAnswer to this command:\n${text}`;
         lost = undefined;
         // a screenshot is not a step of the work: it does not use up the commands
-        if (name !== 'shot' && name !== 'claims') sinceVerdict++;
+        if (name !== 'shot' && name !== 'claims' && name !== 'extension-json') sinceVerdict++; // reading is not acting on the app
         // extension-json: the manifest and nothing else
         if (name !== 'stop' && name !== 'claims' && !(name === 'extension-json' && ok)) {
-          if (open().length && sinceVerdict >= (verdicts.size ? 8 : 12)) text += `\n${sinceVerdict} commands since the last verdict: record pass, fail or skip now.`;
+          if (open().length && sinceVerdict >= (verdicts.size ? 8 : 20)) text += `\n${sinceVerdict} commands since the last verdict: record pass, fail or skip now.`;
           text += `\n${left()}`;
         }
         if (!['pass', 'fail', 'skip', 'claims'].includes(name)) said += `${text.toLowerCase()}\n`;

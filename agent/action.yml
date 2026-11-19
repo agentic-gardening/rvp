@@ -123,8 +123,8 @@ runs:
         for _ in $(seq 60); do curl -sf http://127.0.0.1:11434/api/version > /dev/null && break; sleep 1; done
         echo "pulling $MODEL (progress in ollama-pull.log of the result folder)"
         "$ollama" pull "$MODEL" > "$RVP_OUT/ollama-pull.log" 2>&1 || { tail -n 20 "$RVP_OUT/ollama-pull.log"; exit 1; }
-        # the same model with less random sampling: two runs of one task then take more alike paths
-        printf 'FROM %s\nPARAMETER temperature %s\nPARAMETER seed 1\n' "$MODEL" "$TEMPERATURE" > "$RUNNER_TEMP/Modelfile"
+        # the same model with less random sampling. No fixed seed: with one, a retry repeats a failed run step for step
+        printf 'FROM %s\nPARAMETER temperature %s\n' "$MODEL" "$TEMPERATURE" > "$RUNNER_TEMP/Modelfile"
         "$ollama" create rvp-run -f "$RUNNER_TEMP/Modelfile" >> "$RVP_OUT/ollama-pull.log" 2>&1 && echo "RVP_RUN_MODEL=rvp-run" >> "$GITHUB_ENV" || echo "could not set the temperature: the model runs with its defaults"
         echo "done in ${SECONDS}s"
 
