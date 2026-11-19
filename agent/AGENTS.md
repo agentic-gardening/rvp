@@ -46,7 +46,8 @@ You are on page /images. Tabs here: [Summary] (open), History.
   `styled tooltip, shown above the button: "..."`, or says that the browser shows its own tooltip
   from the title (the old kind). If the side is not the one claimed (left, not above): `fail`.
   For a tooltip that changes when the button is clicked: `hover`, then `click`, and read the line
-  `Tooltip during the click`.
+  `Tooltip during the click`. Each `hover` takes the screenshot that proves the tooltip: give your
+  verdict after it, no id needed.
 - You cannot see pictures: what you know comes from these answers.
 
 ## Steps

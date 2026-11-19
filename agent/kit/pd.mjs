@@ -56,7 +56,7 @@ async function serve(extensions) {
   const media = join(out, 'media');
   mkdirSync(media, { recursive: true });
 
-  const slug = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50);
+  const slug = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 70);
   // The claims are the sentences of the instruction, numbered here: the model answers them by number.
   // When it wrote them itself it recorded one twice, passed what it had seen fail, and never knew it was done.
   // ponytail: one sentence = one claim; "e.g. x" splits in two, write the instruction without it
@@ -65,7 +65,8 @@ async function serve(extensions) {
   const verdicts = new Map(); // claim number -> check
   const open = () => claims.map((_, i) => i + 1).filter(n => !verdicts.has(n));
   const left = () => (open().length ? `Open: ${open().map(n => `claim ${n}`).join(', ')}.` : 'All claims have a verdict: write rvp/notes.md and stop.');
-  let app, alive = false, folders = [], shots = 0, pending = [];
+  let app, alive = false, folders = [], shots = 0;
+  let moments = []; // screenshots since the last verdict, one entry per moment: they are the evidence of the next one
   let refused; // the last verdict that was sent back to the model
   const lastChange = new Map(); // action -> what it changed in the window the last time
   let lost; // an answer nobody read: the model put a timeout on its command and was gone before the end
@@ -135,8 +136,13 @@ async function serve(extensions) {
       if (tries > 120 || !alive) throw new Error('Podman Desktop did not start, or agent-browser could not attach to it.');
       await sleep(1000);
     }
-    // the window exists before the app is loaded in it
-    for (let tries = 0; tries < 120 && !(await js(`'events' in window`)); tries++) await sleep(1000);
+    // The window exists before the app is loaded in it. And attaching while it loads can leave it blank
+    // (the app's preload did not run): it is then reloaded, as a person would.
+    const loaded = () => js(`'events' in window`);
+    for (let reloads = 0; reloads < 4 && !(await loaded()); reloads++) {
+      for (let tries = 0; tries < 20 && !(await loaded()); tries++) await sleep(1000);
+      if (!(await loaded())) await ab('reload').catch(() => {});
+    }
     // the app follows the system theme: pin it, so a run looks the same on every machine
     await ab('set', 'media', 'light');
   }
@@ -485,26 +491,32 @@ async function serve(extensions) {
     return [found, args];
   };
 
-  async function capture(stem) {
-    for (const [suffix, scheme] of themes) {
+  async function capture(stem, all = true) {
+    const files = [];
+    for (const [suffix, scheme] of all ? themes : themes.slice(0, 1)) {
       await ab('set', 'media', scheme);
       if (suffix) await sleep(300); // let the app repaint in the other theme
       await ab('screenshot', join(out, `${stem}${suffix}.png`));
-      pending.push(`${stem}${suffix}.png`);
+      files.push(`${stem}${suffix}.png`);
     }
-    await ab('set', 'media', 'light');
+    if (themes.length > 1) await ab('set', 'media', 'light');
+    moments.push(files);
   }
 
   /**
-   * Screenshots of the window, one per theme, with the given elements outlined in red.
-   * Returns the first file and a note about ids that were not found.
+   * Screenshots of the window, one per theme, with the given elements (ids, or boxes already known)
+   * outlined in red. Returns the first file and a note about ids that were not found.
    */
-  async function shot(name, outlined = []) {
+  async function shot(name, outlined = [], boxes = [], bothThemes = true) {
     const stem = `media/${String(++shots).padStart(2, '0')}-${slug(name)}`;
-    const boxes = [], missing = [];
+    const missing = [];
+    boxes = [...boxes];
     for (const id of outlined) {
       await ab('scrollintoview', `@${id}`).catch(() => {});
-      const box = await boxOf(id).catch(() => undefined);
+      let box = await boxOf(id).catch(() => undefined);
+      // the real input of a checkbox or a switch is one hidden pixel: the frame goes around what is drawn, its label
+      if (box && (box.width < 4 || box.height < 4))
+        box = (await js(`(() => { const el = ${AT(box)}; const r = (el?.closest('label') ?? el?.parentElement)?.getBoundingClientRect(); return r ? { x: r.x, y: r.y, width: r.width, height: r.height } : null; })()`)) ?? box;
       if (box) boxes.push(box);
       else missing.push(id);
     }
@@ -512,21 +524,35 @@ async function serve(extensions) {
     // At least 14 pixels: the real checkbox of a switch is one hidden pixel.
     if (boxes.length)
       await js(`(${JSON.stringify(boxes)}).forEach(b => { const w = Math.max(b.width, 14), h = Math.max(b.height, 14); document.body.insertAdjacentHTML('beforeend', '<div class="rvp-outline" style="position:fixed;left:' + (b.x - (w - b.width) / 2) + 'px;top:' + (b.y - (h - b.height) / 2) + 'px;width:' + w + 'px;height:' + h + 'px;border:3px solid red;box-sizing:border-box;pointer-events:none;z-index:2147483647"></div>'); })`);
-    await capture(stem);
+    await capture(stem, bothThemes);
     await js(`document.querySelectorAll('.rvp-outline').forEach(el => el.remove())`);
     return [`${stem}.png`, missing.length ? ` (no element ${missing.join(', ')} in the window now: not outlined)` : ''];
   }
 
+  /**
+   * The window's own buttons (title bar, on Linux and Windows): Close would end the app, and with it the run.
+   * They are the Close, Minimize and Maximize that sit next to each other.
+   */
+  const windowButtons = lines => {
+    const named = lines.map(parse);
+    const own = (p, i) => p.role === 'button' && /^(Close|Minimize|Maximize)$/.test(p.name ?? '') && named.some((q, j) => j !== i && Math.abs(j - i) <= 6 && indent(lines[j]) === indent(lines[i]) && /^(Minimize|Maximize)$/.test(q.name ?? ''));
+    return new Set(named.filter(own).map(p => p.id));
+  };
   /** The element a command names: an id from look, or the visible name of something in the window. */
   async function target(words, click = false) {
     // a name and an id together ("Run Image e1259"): the id is what was meant
     const given = words.flatMap(word => word.split(' ')).find(word => ID.test(word)) ?? words.join(' ').trim().replace(/^"(.*)"$/, '$1');
-    if (ID.test(given)) return { id: given };
+    if (ID.test(given)) {
+      if (click && windowButtons((await tree()).split('\n')).has(given))
+        throw new Error('not done: that is the window\'s own button, it would close the app. To leave a page click its "Close" or "Back"; to close a dialog press Escape.');
+      return { id: given };
+    }
     if (!given) throw new Error('say what: a name such as "Images", or an id such as e12.');
     let lines, all;
     const read = async () => {
       lines = (await tree()).split('\n');
-      all = lines.map((line, i) => ({ ...parse(line), i })).filter(p => p.id && p.name);
+      const own = windowButtons(lines); // never a match: click "Close" means the page's or the dialog's
+      all = lines.map((line, i) => ({ ...parse(line), i })).filter(p => p.id && p.name && !own.has(p.id));
     };
     const named = (name, role) => {
       const wanted = name.toLowerCase().replace(/^"(.*)"$/, '$1');
@@ -631,12 +657,12 @@ async function serve(extensions) {
     lastChange.set(done, told);
     return `${done}\n${first}\n${same ? 'Same result as the last time you did this.' : body}`;
   };
-  const hoverOne = async id => {
+  const hoverOne = async (id, alone = true) => {
     await act('hover', id);
     await sleep(900); // tooltips appear after a delay
     const box = await boxOf(id);
     // the side of the tooltip comes from the two rectangles
-    return (
+    const seen =
       (await js(`(() => {
         const box = ${JSON.stringify(box)};
         const el = ${AT(box)};
@@ -649,8 +675,14 @@ async function serve(extensions) {
           tip: tip?.textContent.trim() ?? null,
           side: !at ? '' : at.bottom <= box.y + 2 ? 'above' : at.top >= box.y + box.height - 2 ? 'below' : at.right <= box.x + 2 ? 'on the left of' : 'on the right of',
         };
-      })()`)) ?? {}
-    );
+      })()`)) ?? {};
+    // The picture is taken now, with the tooltip on screen: at the verdict it is gone (after Escape, after a
+    // click), and the model outlined the wrong thing. Named by what it shows: that is its caption in the comment.
+    // In the light theme only: the tooltip is what matters, and twice the pictures say nothing more. Of the
+    // buttons of a row, those that show something.
+    if (alone || seen.tip || seen.title)
+      await shot(`hover ${describe(id)?.name ?? ''}: ${seen.tip ? `tooltip ${seen.tip}` : seen.title ? `title ${seen.title}` : 'no tooltip'}`, [], [box], false).catch(() => {});
+    return seen;
   };
   /** One sentence about the tooltip of a hovered element. A `title` is the browser's own tooltip: it is never in the window tree. */
   const tooltipOf = (seen, role) =>
@@ -699,11 +731,11 @@ async function serve(extensions) {
       if (row < 0) lines = (await tree()).split('\n');
       const i = row >= 0 ? row : lines.findIndex(line => line.includes(`[id=${id}]`));
       // on a cell or a toolbar: every button in it, one line each
-      const inside = i < 0 || ACT.test(parse(lines[i]).role ?? '') ? [] : within(lines, i).slice(1).map(parse).filter(p => p.id && /^(button|link)$/.test(p.role)).slice(0, 12);
+      const inside = i < 0 || ACT.test(parse(lines[i]).role ?? '') ? [] : within(lines, i).slice(1).map(parse).filter(p => p.id && /^(button|link)$/.test(p.role)).slice(0, 6);
       if (inside.length) {
         const rows = [];
         for (const p of inside) {
-          const seen = await hoverOne(p.id).catch(() => undefined);
+          const seen = await hoverOne(p.id, false).catch(() => undefined);
           const twice = inside.filter(q => q.name === p.name).length > 1; // the id only tells apart two buttons with one name
           rows.push(`  ${p.role} "${p.name ?? ''}"${twice ? ` [id=${p.id}]` : ''}${seen?.disabled ? ' (disabled)' : ''}${seen?.menu ? ' (opens a menu)' : ''}: ${seen ? tooltipOf(seen, p.role) : 'could not be hovered'}`);
         }
@@ -767,8 +799,8 @@ async function serve(extensions) {
   const giveUp = async why => {
     const n = open()[0];
     await shot(`claim ${n} not decided`).catch(() => undefined);
-    verdicts.set(n, { claim: claims[n - 1], status: 'skipped', reason: `The model gave no verdict ${why}. The screenshot shows the window at that moment.`, screenshots: pending });
-    pending = [];
+    verdicts.set(n, { claim: claims[n - 1], status: 'skipped', reason: `The model gave no verdict ${why}. The screenshot shows the window at that moment.`, screenshots: moments.slice(-5).flat() });
+    moments = [];
     sinceVerdict = 0;
     since = undefined;
     writeFileSync(join(out, 'checks.json'), JSON.stringify(claims.map((_, i) => verdicts.get(i + 1)).filter(Boolean), null, 2));
@@ -825,8 +857,9 @@ async function serve(extensions) {
       since = undefined;
       // a second verdict for a claim replaces the first: a wrong one is corrected, not argued about
       const again = verdicts.has(n);
-      verdicts.set(n, { claim, status, reason: readable(rest.join(' ')), screenshots: pending });
-      pending = [];
+      // the last hovers, then the window at the verdict
+      verdicts.set(n, { claim, status, reason: readable(rest.join(' ')), screenshots: moments.slice(-5).flat() });
+      moments = [];
       writeFileSync(join(out, 'checks.json'), JSON.stringify(claims.map((_, i) => verdicts.get(i + 1)).filter(Boolean), null, 2));
       // for the step that runs the model: nothing is left to do
       if (!open().length) writeFileSync(join(out, 'done'), '');

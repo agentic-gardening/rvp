@@ -54,7 +54,7 @@ export function render(result: Result, url: (media: string) => string, runUrl: s
   if (steps.length) out.push('', '<details><summary>What the agent did</summary>', '', ...steps.map((step, i) => `${i + 1}. ${inline(step, 300)}`), '', '</details>');
   out.push(
     '',
-    '<sub>A local model drove a build of this PR and recorded these verdicts itself. They are its judgement, not a proof: check the screenshots, the video and the action log before relying on them.</sub>',
+    '<sub>A local model drove a build of this PR and recorded these verdicts itself. They are its judgement, not a proof: check the screenshots and the action log before relying on them.</sub>',
   );
   return out.join('\n').slice(0, 60_000);
 }
