@@ -44,7 +44,6 @@ steps.log       the same actions in plain words, with names instead of ids (show
 progress.log    one line per command (what the run page shows live)
 build.log       pnpm install and build output (build-base.log for the base), ollama-pull.log
 notes.md        what the model says it did
-plan.md         the plan the model wrote before starting (its own step on the run page)
 agent.log       what the model thought, said and ran besides the app actions
 pi-session/     the whole conversation of the model (JSONL)
 ```

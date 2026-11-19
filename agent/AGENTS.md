@@ -46,7 +46,7 @@ You are on page /images. Tabs here: [Summary] (open), History.
 ## Steps
 
 1. The numbered claims of "What to verify" below are **all you check**. The pull request text only
-   explains them. Your plan, if you wrote one, is in `rvp/plan.md`.
+   explains them.
 2. One claim at a time: open the page, tab or dialog the claim names, and check the first line
    says it is the open one. Something similar elsewhere proves nothing.
 3. As soon as you saw what the claim says, or saw that the app does something else, give the
@@ -70,8 +70,9 @@ You are on page /images. Tabs here: [Summary] (open), History.
 
 ## Preparing what a claim needs
 
-You may create it with `podman`, then `look` again (the app shows it after a few seconds), and say
-in the reason what you created:
+"Already prepared for you" below lists the images that exist. Use them first. You may create more
+with `podman`, then `look` again (the app shows it after a few seconds), and say in the reason what
+you created:
 
 ```
 podman pull quay.io/podman/hello                      an image

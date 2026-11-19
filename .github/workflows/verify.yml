@@ -28,7 +28,7 @@ on:
       timeout-minutes:
         description: Time the model may spend
         type: string
-        default: '60'
+        default: '80'
       themes:
         description: Screenshots in light and dark theme
         type: boolean

@@ -340,6 +340,9 @@ async function serve(extensions) {
       });
     };
     tidy(root);
+    // The buttons of the title bar and the tab links: in every view and never the subject of a claim. They still
+    // work by name (click "Back"), and the first line of an answer already says the tabs.
+    if (brief) root.kids = root.kids.filter(kid => !(kid.role === 'button' && /^((Back|Forward) \(hold for history\)|Search|Minimize|Maximize|Close)$/.test(kid.name ?? '')) && !(kid.role === 'region' && kid.name === 'Tabs'));
     const leaves = node => (node.kids.length ? node.kids.flatMap(leaves) : [node]);
     const said = node => `${node.text ?? node.name}${/\[disabled\]/.test(node.line) ? ' (disabled)' : ''}`;
     const kept = [];
@@ -579,7 +582,10 @@ async function serve(extensions) {
     // another page: what look would say, so that no second command is needed (a diff cut short hid the buttons)
     if (before.page !== address(first)) {
       hovered = undefined;
-      return `${done}\n${first}\n${cut(now, 1500, HINT)}`;
+      // without the navigation line (it never changes), and only the start of the tab's content: its buttons are above it
+      const content = now.findIndex(line => line.startsWith('- region "Tab Content"'));
+      const page = now.filter((line, i) => !line.startsWith('- navigation:') && (content < 0 || i <= content + 6));
+      return `${done}\n${first}\n${cut(page, 1500, HINT)}`;
     }
     const { appeared, gone } = changes(before, now);
     if (!appeared.length && !gone.length) return `${done}\n${first}\nNothing changed in the window.`;
