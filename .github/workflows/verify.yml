@@ -29,7 +29,7 @@ on:
         description: How much the model reasons before each command
         type: choice
         options: ['off', minimal, low, medium, high]
-        default: 'off'
+        default: low
       timeout-minutes:
         description: Time the model may spend
         type: string

@@ -5,7 +5,7 @@
 #   /rvp macos check that ...          (linux by default; windows and macos also work)
 #   /rvp arm check that ...            (Linux on arm64)
 #   /rvp model=qwen3.5:4b check that ...   (another Ollama model; can be combined with the runner)
-#   /rvp thinking=low check that ...   (the model reasons before each command: slower)
+#   /rvp thinking=medium check that ...   (how much the model reasons before each command: off, minimal, low, medium, high; low by default)
 #
 # The result comes back as a comment on the same pull request.
 #
@@ -47,7 +47,7 @@ jobs:
           [[ "$BODY" =~ ^/rvp[[:space:]] ]] || { echo "not an rvp command"; exit 1; }
           # one line, so it cannot add other outputs
           text=$(printf '%s' "${BODY#/rvp}" | tr '\r\n\t' '   ' | sed -e 's/^ *//' -e 's/ *$//')
-          runner=linux model= thinking=off
+          runner=linux model= thinking=low
           # options come first, in any order; the rest is the instruction
           while :; do
             case "$text" in
