@@ -52,7 +52,7 @@ You are on page /images. Tabs here: [Summary] (open), History.
 3. As soon as you saw what the claim says, or saw that the app does something else, give the
    verdict **before anything else**: `pass`, `fail` or `skip` with the number of the claim.
    Two failed attempts: `skip`, saying what you tried. A claim without a verdict after 25
-   commands or 12 minutes is closed as skipped for you.
+   commands or 20 minutes is closed as skipped for you.
 4. A verdict sent again for the same number replaces the first one: correct a mistake that way.
 5. Every answer ends with the claims still open. When none is left, write `rvp/notes.md` (three
    to ten lines) and stop.

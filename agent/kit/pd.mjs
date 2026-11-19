@@ -753,7 +753,9 @@ async function serve(extensions) {
   };
   // The model is not waited for: a claim that used its commands or its minutes is closed here, with a
   // screenshot of the window as it is. A run always ends with a report, whatever the model does.
-  const MINUTES = Number(process.env.RVP_CLAIM_MINUTES) || 12;
+  // 20: at one command a minute, 12 closed a claim the moment the model reached the page that proves it
+  const MINUTES = Number(process.env.RVP_CLAIM_MINUTES) || 20;
+  let said = ''; // every answer so far, to check a pass against what the model was really told
   let since; // when the work on the current claim started (its first action on the app)
   const giveUp = async why => {
     const n = open()[0];
@@ -764,7 +766,8 @@ async function serve(extensions) {
     since = undefined;
     writeFileSync(join(out, 'checks.json'), JSON.stringify(claims.map((_, i) => verdicts.get(i + 1)).filter(Boolean), null, 2));
     if (!open().length) writeFileSync(join(out, 'done'), '');
-    return `Claim ${n} was closed as skipped: no verdict ${why}. ${open().length ? `Go on with claim ${open()[0]}; you may still send pass ${n} or fail ${n} if you know.` : ''}\n`;
+    // after the answer of the command that was running: that answer may be the proof
+    return `\nClaim ${n} was closed as skipped: no verdict ${why}. If the answer above shows it, send pass ${n} or fail ${n} now${open().length ? `; if not, go on with claim ${open()[0]}` : ''}.`;
   };
   commands.claims = async () => claims.map((c, i) => `${i + 1}. ${c}`).join('\n');
   for (const [verb, status] of [['pass', 'passed'], ['fail', 'failed'], ['skip', 'skipped']]) {
@@ -791,6 +794,22 @@ async function serve(extensions) {
             `Click the "${named.name}" tab${id ? ` (id ${id})` : ''}, look, then give your verdict.\n` +
             `If the open tab really is the right place, send the same command again.`,
         );
+      }
+      // A pass is checked against what the tool printed; sent back once, the same command again is accepted.
+      // ponytail: two cheap checks. A quoted text of the claim must have been printed; the reason must not be the claim again.
+      if (status === 'passed' && refused !== command) {
+        const missing = (claim.match(/"[^"]{3,}"/g) ?? []).map(q => q.slice(1, -1)).find(q => !said.includes(q.toLowerCase()));
+        const words = text => new Set(text.toLowerCase().match(/[a-z0-9]{3,}/g) ?? []);
+        const [mine, theirs] = [words(rest.join(' ')), words(claim)];
+        const parrot = mine.size > 0 && [...mine].filter(w => theirs.has(w)).length >= 0.8 * mine.size;
+        if (missing || parrot || !mine.size) {
+          refused = command;
+          throw new Error(
+            missing
+              ? `not recorded: no answer ever printed "${missing}", so you did not see it. Send fail ${n} or skip ${n} with what you saw; the same command again only if you are sure.`
+              : `not recorded: the reason repeats the claim. Write what an answer printed that proves it (quote it), or send fail ${n} or skip ${n}.`,
+          );
+        }
       }
       const note = status === 'skipped' ? '' : (await shot(`claim ${n} ${status}`, outlined))[1];
       sinceVerdict = -1; // this command is counted right after
@@ -833,7 +852,7 @@ async function serve(extensions) {
             await start(folders);
             reopened = 'The app window had closed, so the app was started again: it is back on the Dashboard.\n';
           }
-          text = closed + reopened + (await commands[name](...rest));
+          text = reopened + (await commands[name](...rest)) + closed;
         } catch (error) {
           ok = false;
           text = `error: ${String(error.message ?? error).split('\n').slice(0, 6).join('\n')}`;
@@ -846,6 +865,7 @@ async function serve(extensions) {
           if (open().length && sinceVerdict >= (verdicts.size ? 8 : 12)) text += `\n${sinceVerdict} commands since the last verdict: record pass, fail or skip now.`;
           text += `\n${left()}`;
         }
+        if (!['pass', 'fail', 'skip', 'claims'].includes(name)) said += `${text.toLowerCase()}\n`;
         appendFileSync(join(out, 'actions.log'), `$ ${[name, ...rest].join(' ')}\n${text.slice(0, 600)}\n\n`);
         // one line per action, for whoever watches the run
         const lines = text.split('\n');

@@ -24,7 +24,7 @@ sentence says, not what you meant.
    - the model reads the instruction and the PR description, then drives the app with a small
      command (`node rvp/pd.mjs look | click | hover | fill | eval`) and records a verdict for each
      numbered claim (`pass | fail | skip`); a screenshot is taken at each verdict, and a claim the
-     model does not decide in 25 commands or 12 minutes is closed as skipped, with a screenshot;
+     model does not decide in 25 commands or 20 minutes is closed as skipped, with a screenshot;
    - the app is closed and the result folder is uploaded as the `rvp-result` artifact.
 2. **comment job** (holds the tokens, runs no PR code)
    - checks the folder, publishes the screenshots, comments on the pull request.
