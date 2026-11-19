@@ -247,7 +247,7 @@ async function serve(extensions) {
         last: sessionStorage.getItem('last-route'),
         settings: sessionStorage.getItem('settings-page'),
         tabs: [...document.querySelectorAll('button[class*="--pd-button-tab-border"], a[class*="--pd-tab-text"]')]
-          .filter(el => el.offsetParent)
+          .filter(el => el.offsetParent && !el.closest('[role="dialog"],[role="alertdialog"]'))
           .map(el => ({ name: (el.getAttribute('aria-label') ?? el.textContent).trim(), open: /--pd-button-tab-border-selected|--pd-tab-text-highlight/.test(el.className) })),
         tips: [...document.querySelectorAll('[role="tooltip"]')].filter(el => el.getClientRects().length && el.textContent.trim()).map(el => el.textContent.trim()),
       }))()`)) ?? {}; // a tooltip exists only while the mouse (or the focus) is on its element
@@ -269,7 +269,9 @@ async function serve(extensions) {
     const rest = line.replace(/^\s*- \w+( "(?:[^"\\]|\\.)*")?/, '');
     return { role, name: name?.replace(/\\(.)/g, '$1'), id: /\[id=(\w+)\]/.exec(rest)?.[1], text: /:\s(.+)$/.exec(rest)?.[1] };
   };
-  const WRAP = /^(region|group|generic|navigation|rowgroup|list|table|main|banner|cell)$/;
+  const WRAP = /^(region|group|generic|navigation|rowgroup|list|table|main|banner|cell|LabelText|paragraph)$/;
+  const PLAIN = /^(heading|region|generic|paragraph|navigation|table|list|status|columnheader|form|article|text)$/;
+  const ROWS = 12; // rows of a list shown in the default view: two in full, the others with their first values
   /**
    * Only what a person can use or read: the lines with a name or a text, without pictures, indented by
    * what is kept. Wrappers around one thing are removed. `brief` (the default view, and what is
@@ -284,7 +286,7 @@ async function serve(extensions) {
       skip = -1;
       const p = parse(line);
       while (open.at(-1).depth >= indent(line)) open.pop(); // also for a line that is left out: what follows is not inside the previous one
-      if (!p.role || p.role === 'img' || p.role === 'image' || p.role === 'separator' || !(p.name || p.text)) continue;
+      if (!p.role || p.role === 'img' || p.role === 'image' || p.role === 'LineBreak' || p.role === 'separator' || !(p.name || p.text)) continue;
       // the text of a thing that already says it: heading "Images" > text "Images"
       if (p.role === 'text' && open.at(-1).name?.trim().toLowerCase() === p.text.trim().toLowerCase()) continue;
       if (brief && p.role === 'contentinfo') { skip = indent(line); continue; }
@@ -302,6 +304,30 @@ async function serve(extensions) {
         if (wrapper && !kid.kids.length) return kid.role === 'cell' ? [kid] : []; // a cell with only a name is a value
         return wrapper && kid.kids.length === 1 ? kid.kids : [kid];
       });
+      // A sentence arrives in pieces (text, bold, code): one line. And a text that the control next to it
+      // already says is not repeated: the label of a field, the description of a switch, its "Enabled".
+      const kids = [];
+      node.kids.forEach((kid, i) => {
+        const last = kids.at(-1);
+        if (kid.role !== 'text') return kids.push(kid);
+        const said = kid.text.trim().toLowerCase();
+        const control = node.kids.slice(i + 1).find(next => next.role !== 'text');
+        if (control && ACT.test(control.role) && (control.name?.toLowerCase().includes(said) || /^(checkbox|switch)$/.test(control.role) && /^(enabled|disabled)$/.test(said))) return;
+        if (last?.role === 'text' && last.text.trim().toLowerCase() === said) return;
+        // pieces of one sentence touch (a space or a comma at the join, or a very short piece such as a quote);
+        // two texts that only follow each other are kept apart
+        const glued = /\s$/.test(last?.text ?? '') || /^[\s,.;:)]/.test(kid.text) || kid.text.trim().length < 3 || (last?.text?.trim().length ?? 9) < 3;
+        if (last?.role === 'text') last.text = `${last.text}${glued ? '' : ' · '}${kid.text}`.replace(/\s+/g, ' ');
+        else kids.push({ ...kid });
+      });
+      for (const kid of kids) if (kid.role === 'text') kid.line = `- text: ${kid.text.trim().replace(/^(.{100}).+$/, '$1…')}`;
+      node.kids = kids;
+      // a thing that holds one text says it on its own line: heading "Title": Resources
+      if (node.line && !ACT.test(node.role) && node.role !== 'row' && kids.length === 1 && kids[0].role === 'text') {
+        node.text = kids[0].text.trim();
+        node.line = `${node.line}: ${node.text.replace(/^(.{100}).+$/, '$1…')}`;
+        node.kids = [];
+      }
     };
     tidy(root);
     // The buttons of the title bar and the tab links: in every view and never the subject of a claim. They still
@@ -315,25 +341,43 @@ async function serve(extensions) {
       for (let i = 0; i < nodes.length; i++) {
         const node = nodes[i];
         const below = node.kids.flatMap(leaves);
-        if (brief && node.role === 'navigation' && below.length && below.every(leaf => leaf.role === 'link')) {
-          kept.push(`${pad}- navigation: ${below.map(said).join(', ')}`);
+        const links = below.filter(leaf => leaf.role === 'link');
+        if (brief && node.role === 'row' && nodes.slice(0, i).filter(n => n.role === 'row').length >= ROWS) {
+          // a long list is cut by row, not in the middle of one
+          const more = nodes.slice(i).filter(n => n.role === 'row');
+          kept.push(`${pad}… ${more.length} more rows. Use: look "<name>" to see one.`);
+          i = nodes.lastIndexOf(more.at(-1));
+        } else if (brief && node.role === 'navigation' && links.length >= 3 && below.every(leaf => leaf.role === 'link' || leaf.role === 'text')) {
+          // any menu of links, on one line; the text in it is its title ("Settings")
+          const title = below.find(leaf => leaf.role === 'text')?.text.trim();
+          // a long menu (the sections of a settings page) is named by its first entries
+          kept.push(`${pad}- navigation${title ? ` "${title}"` : ''}: ${links.slice(0, 12).map(said).join(', ')}${links.length > 12 ? `, … ${links.length - 12} more` : ''}`);
         } else if (brief && node.role === 'row' && below.length) {
           // with their ids: several rows have the same buttons, so a name alone is not enough to use one
           // an open menu is said: its items look like more buttons of the row otherwise
-          const inside = (n, test) => n.kids.flatMap(kid => (test(kid) ? [kid] : inside(kid, test)));
-          const menu = new Set(inside(node, kid => kid.role === 'menu' || (kid.role !== 'button' && /menu items/i.test(kid.name ?? ''))).flatMap(leaves));
+          // ponytail: the items of an open menu are the buttons after the menu button, which is the last action of a row
+          const acts = below.filter(leaf => ACT.test(leaf.role));
+          const menuAt = acts.findIndex(leaf => leaf.role === 'button' && /menu|kebab|more/i.test(leaf.name ?? ''));
+          const menu = new Set(menuAt < 0 ? [] : acts.slice(menuAt + 1));
           const label = leaf => `${leaf.text ?? leaf.name}${/ \[id=\w+\]/.exec(leaf.line)?.[0] ?? ''}${/\[disabled\]/.test(leaf.line) ? ' (disabled)' : ''}`;
           const open = [...menu].filter(leaf => ACT.test(leaf.role)).map(label);
-          const buttons = below.filter(leaf => ACT.test(leaf.role) && !menu.has(leaf)).map(leaf => `${leaf.text ?? leaf.name}${/ \[id=\w+\]/.exec(leaf.line)?.[0] ?? ''}${/\[disabled\]/.test(leaf.line) ? ' (disabled)' : ''}`);
+          // The button that carries the name of the row opens its item: its id is given as the id of the row.
+          // The selection checkbox is left out: `look "<name>"` shows a row with everything in it.
+          const opener = below.find(leaf => leaf.role === 'button' && node.name && leaf.name?.startsWith(node.name));
+          const buttons = below.filter(leaf => ACT.test(leaf.role) && !menu.has(leaf) && leaf !== opener && leaf.role !== 'checkbox').map(label);
           const texts = [...new Set(below.filter(leaf => !ACT.test(leaf.role)).map(said))];
-          kept.push(`${pad}${node.line.replace(/:$/, '')}: ${texts.join(', ')}${buttons.length ? `. Buttons: ${buttons.join(', ')}` : ''}${open.length ? `. Menu open: ${open.join(', ')}` : ''}`);
+          const head = `${pad}${node.line}${/ \[id=\w+\]/.exec(opener?.line ?? '')?.[0] ?? ''}: `;
+          // two rows in full show what a row offers; the next ones say what they are, which is what a list is searched for
+          const full = nodes.slice(0, i).filter(n => n.role === 'row' && n.kids.flatMap(leaves).some(leaf => leaf.role !== 'columnheader')).length < 2 || open.length;
+          kept.push(full ? `${head}${texts.join(', ')}${buttons.length ? `. Buttons: ${buttons.join(', ')}` : ''}${open.length ? `. Menu open: ${open.join(', ')}` : ''}` : `${head}${texts.slice(0, 2).join(', ')}`);
         } else if (brief && node.role === 'columnheader') {
           let j = i;
           while (nodes[j + 1]?.role === 'columnheader') j++;
           kept.push(`${pad}- columns: ${nodes.slice(i, j + 1).map(said).join(', ')}`);
           i = j;
         } else {
-          kept.push(pad + (node.kids.length ? node.line : node.line.replace(/:$/, '')));
+          // an id only where it is used: on what can be clicked, typed in or hovered, and on dialogs
+          kept.push(pad + (brief && PLAIN.test(node.role) ? node.line.replace(/ \[id=\w+\]/, '') : node.line));
           print(node.kids, level + 1);
         }
       }
@@ -381,7 +425,7 @@ async function serve(extensions) {
     return ` It may be in a menu (click one), or on the page of the item (click its name):\n${found.map(p => `  ${p.id}  ${p.name}${row(p.i) ? ` of row "${row(p.i).slice(0, 60)}"` : ''}`).join('\n')}`;
   };
 
-  async function look(what, limit = 2000, tries = 3) {
+  async function look(what, limit = 1200, tries = 3) {
     const lines = (await tree()).split('\n');
     const first = (await where()).line;
     if (!what) return `${first}\n${cut(compact(lines, true), limit, HINT)}`;
@@ -390,21 +434,33 @@ async function serve(extensions) {
       const i = lines.findIndex(line => line.includes(`[id=${what}]`));
       // an old id costs the model a whole turn: answer with the window as it is
       if (i < 0) return `${what} is gone: the window changed.\n${first}\n${cut(compact(lines, true), limit, HINT)}`;
-      return `${first}\n${cut(compact(within(lines, i)), 3000, HINT)}`;
+      return `${first}\n${cut(compact(within(lines, i)), 2000, HINT)}`;
     }
     const parts = new Map(); // first line of a part -> its lines
     // whole words first: USED is not UNUSED
     const word = new RegExp(`(?<!\\w)${what.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?!\\w)`, 'i');
     const has = lines.some(line => word.test(line)) ? line => word.test(line) : line => line.toLowerCase().includes(what.toLowerCase());
-    lines.forEach((line, i) => {
-      if (!has(line)) return;
+    // a menu link that merely contains the word counts only when nothing else does
+    const inMenu = i => {
+      for (let j = i, level = indent(lines[i]) + 1; j >= 0; j--) {
+        if (indent(lines[j]) >= level) continue;
+        level = indent(lines[j]);
+        if (parse(lines[j]).role === 'navigation') return true;
+      }
+      return false;
+    };
+    const hits = lines.map((line, i) => i).filter(i => has(lines[i]));
+    const wanted = hits.some(i => !inMenu(i)) ? hits.filter(i => !inMenu(i)) : hits;
+    const covered = i => [...parts.keys()].some(start => start <= i && i < start + parts.get(start).length);
+    for (const i of wanted) {
+      if (covered(i)) continue; // each part once
       const block = blockOf(lines, i);
-      if (block >= 0) parts.set(block, within(lines, block));
-      else if (![...parts.keys()].some(start => start <= i && i < start + parts.get(start).length)) parts.set(Math.max(0, i - 3), lines.slice(Math.max(0, i - 3), i + 7));
-    });
+      if (block >= 0 && !covered(block)) parts.set(block, within(lines, block));
+      else if (block < 0) parts.set(Math.max(0, i - 3), lines.slice(Math.max(0, i - 3), i + 7));
+    }
     if (!parts.size && tries > 1) return (await sleep(1000), look(what, limit, tries - 1)); // it may still be loading
     if (!parts.size) return `${first}\n"${what}" is not in the window.${menus(lines)}`;
-    return `${first}\n${cut([...parts.values()].flatMap(part => compact(part)), 3000, HINT)}`;
+    return `${first}\n${cut([...parts.values()].flatMap(part => compact(part)), 2000, HINT)}`;
   }
 
   /** What appeared and what went away between two views of the window. Ids are left out: the same line keeps the same words. */
@@ -475,7 +531,9 @@ async function serve(extensions) {
     const named = (name, role) => {
       const wanted = name.toLowerCase().replace(/^"(.*)"$/, '$1');
       const exact = all.filter(p => p.name.toLowerCase() === wanted && (!role || p.role === role));
-      const part = all.filter(p => p.name.toLowerCase().includes(wanted) && (!role || p.role === role));
+      // a part of a name counts when it starts the name or is a good share of it: "Disabled" is not the
+      // switch whose long description happens to contain that word
+      const part = all.filter(p => (p.name.toLowerCase().startsWith(wanted) || (p.name.toLowerCase().includes(wanted) && wanted.length >= 0.4 * p.name.length)) && (!role || p.role === role));
       // a click on the name of a row means its item: the button "name id tag" in it opens the page, the row opens nothing
       if (click && exact.length && !exact.some(p => ACT.test(p.role))) return part;
       return exact.length ? exact : part;
@@ -522,8 +580,9 @@ async function serve(extensions) {
     if (before.page !== address(first)) {
       // without the navigation line (it never changes), and only the start of the tab's content: its buttons are above it
       const content = now.findIndex(line => line.startsWith('- region "Tab Content"'));
-      const page = now.filter((line, i) => !line.startsWith('- navigation:') && (content < 0 || i <= content + 6));
-      return `${done}\n${first}\n${cut(page, 1500, HINT)}`;
+      const was = new Set(before.map(key)); // a menu that was already there is not printed again
+      const page = now.filter((line, i) => !(line.trim().startsWith('- navigation') && was.has(key(line))) && (content < 0 || i <= content + 6));
+      return `${done}\n${first}\n${cut(page, 900, HINT)}`;
     }
     const { appeared, gone } = changes(before, now);
     if (!appeared.length && !gone.length) return `${done}\n${first}\nNothing changed in the window.`;
@@ -540,6 +599,13 @@ async function serve(extensions) {
     }
     const still = new Set(now.map(bare));
     const left = gone.filter(line => !still.has(bare(line)));
+    // one control went and one of the same kind came: it changed its name, as a dropdown does with its value
+    const [was, is] = [left.filter(line => ACT.test(parse(line).role ?? '')), fresh.filter(i => ACT.test(parse(now[i]).role ?? ''))];
+    if (was.length === 1 && is.length === 1 && parse(was[0]).role === parse(now[is[0]]).role) {
+      changed.push(`${bare(was[0]).replace(/^- /, '')} → ${now[is[0]].trim().replace(/^- /, '')}`);
+      left.splice(left.indexOf(was[0]), 1);
+      fresh.splice(fresh.indexOf(is[0]), 1);
+    }
     // new lines, grouped under the nearest thing they are in that was already there
     const groups = new Map();
     for (const i of fresh) {
@@ -558,7 +624,7 @@ async function serve(extensions) {
     }
     if (changed.length) parts.push(`Changed: ${changed.slice(0, 5).map(line => line.replace(/^- /, '')).join('; ')}`);
     if (left.length) parts.push(`Gone: ${left.length} lines (${left[0].replace(/^- /, '').slice(0, 60)}${left.length > 1 ? ', ...' : ''})`);
-    const body = parts.length ? cut(parts, 800, 'Use: look to see the window.') : 'Nothing changed in the window.';
+    const body = parts.length ? cut(parts, 600, 'Use: look to see the window.') : 'Nothing changed in the window.';
     // a loop gives the same answer again and again: say so in one line
     const told = body.replace(/ \[id=\w+\]/g, '');
     const same = lastChange.get(done) === told && parts.length > 2;
@@ -615,14 +681,23 @@ async function serve(extensions) {
       const [label, before] = [what(id), await state()];
       await watchTooltip();
       await act('click', id);
+      const chosen = describe(id);
       const answer = await after(`clicked ${label}.`, before);
-      return [answer, await watchedTooltip()].filter(Boolean).join('\n');
+      // A choice in a dropdown goes away with its list, and the control takes its name: say so, the
+      // list of changes does not (the same name was there before, as the choice).
+      const same = chosen ? snapshot.replace(/\[ref=/g, '[id=').split('\n').map(parse).filter(p => p.role === chosen.role && p.name === chosen.name) : [];
+      const shows = same.length === 1 && same[0].id !== id ? `The control now shows "${chosen.name}" [id=${same[0].id}].` : '';
+      return [answer, shows, await watchedTooltip()].filter(Boolean).join('\n');
     },
     hover: async (...words) => {
-      const { id } = await target(words);
-      const label = what(id);
-      const lines = (await tree()).split('\n');
-      const i = lines.findIndex(line => line.includes(`[id=${id}]`));
+      // a row has no id of its own: it is named, and its buttons are hovered one by one
+      let lines = (await tree()).split('\n');
+      const named = words.join(' ').trim().replace(/^"(.*)"$/, '$1').toLowerCase();
+      const row = lines.findIndex(line => parse(line).role === 'row' && parse(line).name?.toLowerCase() === named);
+      const id = row >= 0 ? undefined : (await target(words)).id;
+      const label = row >= 0 ? `row "${parse(lines[row]).name}"` : what(id);
+      if (row < 0) lines = (await tree()).split('\n');
+      const i = row >= 0 ? row : lines.findIndex(line => line.includes(`[id=${id}]`));
       // on a cell or a toolbar: every button in it, one line each
       const inside = i < 0 || ACT.test(parse(lines[i]).role ?? '') ? [] : within(lines, i).slice(1).map(parse).filter(p => p.id && /^(button|link)$/.test(p.role)).slice(0, 12);
       if (inside.length) {

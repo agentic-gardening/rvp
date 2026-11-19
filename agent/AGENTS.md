@@ -23,24 +23,30 @@ node rvp/pd.mjs eval e432 "el => el.title"   JavaScript on one element
 ```
 You are on page /images. Tabs here: [Summary] (open), History.
 - navigation: Dashboard, Containers, Pods, Images, Volumes, Networks, Secrets, Kubernetes, Extensions, Accounts, Settings
-- heading "images" [id=e407]
+- heading "Images"
 - button "Pull" [id=e432]
 - row "quay.io/podman/hello" [id=e669]: USED, podman, 2 years. Buttons: Run Image [id=e675], Delete Image [id=e681] (disabled), kebab menu [id=e688]
+- row "quay.io/libpod/alpine" [id=e700]: UNUSED, podman
+- checkbox "Quit the app when the close button is clicked" [off] [id=e206]
 ```
 
 - The first line says the page, the tabs with the open one, and the tooltip if one is shown.
   Tabs are buttons; only this line tells which tab is open.
-- Use names, or the id printed next to a thing. Buttons of a row: always the id, every row has the same names.
+- What can be clicked, typed in or hovered has an id. Use its name, or the id. Buttons of a row:
+  always the id, every row has the same names.
+- A row is one line: its values, its buttons, and `Menu open:` with the items when its menu is
+  open. The id of a row opens its item (the details page). From the third row on only the first
+  values are shown: `look "<name>"` shows one row in full.
+- A switch or a checkbox says `[on]` or `[off]`; `click` changes it. A dropdown is a button named
+  by its value: `click` it, then `click` a choice.
 - After `click`, `fill` or `press` the answer is only what changed in the window (the whole
   window when the page changed).
-- A row is one line: values, then buttons, then `Menu open:` with its items when its menu is open. Actions that are not there are in its `kebab menu`
-  (click it) or on the details page (click the name of the item).
 - Ids work only in these commands, never inside JavaScript: the page does not know them.
 - Tooltips exist only under the mouse. `hover` answers
   `styled tooltip, shown above the button: "..."`, or says that the browser shows its own tooltip
   from the title (the old kind). If the side is not the one claimed (left, not above): `fail`.
-  For a tooltip that changes when the button is used: `hover` it, `click` it, `click` the button
-  of the dialog if one opens, and read the line `Tooltip ... the click`.
+  For a tooltip that changes when the button is clicked: `hover`, then `click`, and read the line
+  `Tooltip during the click`.
 - You cannot see pictures: what you know comes from these answers.
 
 ## Steps
