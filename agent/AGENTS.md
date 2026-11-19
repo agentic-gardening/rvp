@@ -12,6 +12,7 @@ node rvp/pd.mjs click "Images"            click by name (by id when a name is no
 node rvp/pd.mjs hover "Save Image"        mouse on it: prints its tooltip. On a row: the tooltip of each button
 node rvp/pd.mjs fill "search images" "hello"   type into a field
 node rvp/pd.mjs press Enter               press a key
+node rvp/pd.mjs size 800 600              window size; takes the screenshot of that size
 node rvp/pd.mjs pass 1 e432 "what you saw"    claim 1 is true (e432: the element that shows it, for the screenshot)
 node rvp/pd.mjs fail 1 e432 "what you saw instead"   claim 1 is false: the app does not do it
 node rvp/pd.mjs skip 1 "why"                  claim 1 could not be checked
@@ -48,6 +49,8 @@ You are on page /images. Tabs here: [Summary] (open), History.
   For a tooltip that changes when the button is clicked: `hover`, then `click`, and read the line
   `Tooltip during the click`. Each `hover` takes the screenshot that proves the tooltip: give your
   verdict after it, no id needed.
+- For a claim about sizes or resolutions: open the page, `size` two or three times (for example
+  800 600, 1280 800, 1920 1080), `look` after each to read what changed, then the verdict.
 - You cannot see pictures: what you know comes from these answers.
 
 ## Steps

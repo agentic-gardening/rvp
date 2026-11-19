@@ -787,6 +787,15 @@ async function serve(extensions) {
       await shot(readable(name.join(' ')) || 'screenshot', outlined);
       return `Screenshots are taken for you at each verdict. Nothing was clicked.${outlined[0] ? ` To click it: click ${outlined[0]}` : ''}`;
     },
+    size: async (w, h) => {
+      const [width, height] = [Number(w), Number(h)];
+      if (!(width >= 400 && width <= 2560 && height >= 300 && height <= 1600))
+        throw new Error('not done: size <width> <height>, for example size 800 600');
+      await ab('set', 'viewport', String(width), String(height));
+      await sleep(500); // let the app lay itself out again
+      await capture(`media/${String(++shots).padStart(2, '0')}-${slug(`size ${width}x${height}`)}`);
+      return `window is now ${width}x${height}, screenshot taken.\n${(await look()).split('\n')[0]}`;
+    },
     restart: async (...folders) => (await stop(), await start(folders), `restarted with ${folders.length} extension folder(s).`),
     stop: async () => (await stop(), setTimeout(() => process.exit(0), 100), 'stopped.'),
   };
@@ -799,7 +808,7 @@ async function serve(extensions) {
   const giveUp = async why => {
     const n = open()[0];
     await shot(`claim ${n} not decided`).catch(() => undefined);
-    verdicts.set(n, { claim: claims[n - 1], status: 'skipped', reason: `The model gave no verdict ${why}. The screenshot shows the window at that moment.`, screenshots: moments.slice(-5).flat() });
+    verdicts.set(n, { claim: claims[n - 1], status: 'skipped', reason: `The model gave no verdict ${why}. The screenshot shows the window at that moment.`, screenshots: moments.slice(-8).flat() });
     moments = [];
     sinceVerdict = 0;
     since = undefined;
@@ -858,7 +867,7 @@ async function serve(extensions) {
       // a second verdict for a claim replaces the first: a wrong one is corrected, not argued about
       const again = verdicts.has(n);
       // the last hovers, then the window at the verdict
-      verdicts.set(n, { claim, status, reason: readable(rest.join(' ')), screenshots: moments.slice(-5).flat() });
+      verdicts.set(n, { claim, status, reason: readable(rest.join(' ')), screenshots: moments.slice(-8).flat() });
       moments = [];
       writeFileSync(join(out, 'checks.json'), JSON.stringify(claims.map((_, i) => verdicts.get(i + 1)).filter(Boolean), null, 2));
       // for the step that runs the model: nothing is left to do
