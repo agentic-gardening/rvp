@@ -401,8 +401,17 @@ async function serve(extensions) {
     return -1;
   };
   const menus = lines => {
-    const found = lines.map(parse).filter(p => p.id && p.role === 'button' && /menu|more|kebab/i.test(p.name ?? '')).slice(0, 5);
-    return found.length ? ` It may be in a menu: ${found.map(p => `"${p.name}" (${p.id})`).join(', ')}.` : '';
+    // every row calls its menu button "kebab menu": the row is what tells them apart
+    const row = i => {
+      for (let j = i - 1, level = indent(lines[i]); j >= 0; j--) {
+        if (indent(lines[j]) >= level) continue;
+        level = indent(lines[j]);
+        if (parse(lines[j]).role === 'row') return parse(lines[j]).name;
+      }
+    };
+    const found = lines.map((line, i) => ({ ...parse(line), i })).filter(p => p.id && p.role === 'button' && /menu|more|kebab/i.test(p.name ?? '')).slice(0, 4);
+    if (!found.length) return '';
+    return ` It may be in a menu (click one), or on the page of the item (click its name):\n${found.map(p => `  ${p.id}  ${p.name}${row(p.i) ? ` of row "${row(p.i).slice(0, 60)}"` : ''}`).join('\n')}`;
   };
 
   async function look(what, limit = 2000, tries = 3) {
@@ -539,7 +548,7 @@ async function serve(extensions) {
       if (!found.length && rest) found = named(rest, role);
     }
     if (found.some(p => ACT.test(p.role))) found = found.filter(p => ACT.test(p.role));
-    if (!found.length) throw new Error(`nothing is named "${given}" in the window.${menus(lines)} Run look to see what is there.`);
+    if (!found.length) throw new Error(`nothing is named "${given}" in the window.${menus(lines) || ' Run look to see what is there.'}`);
     if (found.length > 1) {
       const place = i => {
         const block = blockOf(lines, i);
