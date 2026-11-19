@@ -96,9 +96,12 @@ podman build -t rvp-test-image <folder>               an image, from a Container
 ## Extensions
 
 - For a claim about what an extension adds (its icons): install it if it is not, then
-  `node rvp/pd.mjs extension "<name>"`. It says where each icon shows and the command that creates
-  what is needed. Run that command, open the page, `look "<name of the row>"`: the row says
-  `Icon from an extension: <id> (drawn)`. Quote that in the verdict, with the id of the row.
+  `node rvp/pd.mjs extension-json "<name>"` prints its manifest. In it, `contributes.icons` are its
+  icons, and `contributes.views` says in which list each one shows (`icons/containersList`: the
+  Containers list, `icons/image`: the Images list) and the `when` condition, for example a label
+  the container must have. Create a container or an image that meets it with `podman`
+  (`podman run -d --name rvp-x --label <label>=x quay.io/podman/hello`), open that list, and
+  `look "rvp-x"`: its row says `Icon from an extension: <id> (drawn)`. Quote that in the verdict.
   The catalog showing an extension proves nothing about its icons.
 - From an image: `click "Extensions"`, `click "Install custom..."`, `fill` the "OCI Image" field,
   `click "Install"`, then `look` until it reports the result.

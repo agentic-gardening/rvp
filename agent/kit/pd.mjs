@@ -222,7 +222,7 @@ async function serve(extensions) {
     if (name === 'eval' && on) return `run on ${on}: ${rest.join(' ').slice(0, 120)}`;
     if (name === 'fill') return on ? `type "${rest.join(' ')}" into ${on}` : `type "${args.slice(1).join(' ')}" into "${args[0]}"`;
     if (name === 'press') return `press ${args[0]}`;
-    if (name === 'extension') return `read what the extension "${args.join(' ')}" adds`;
+    if (name === 'extension-json') return `read the manifest of the extension "${args.join(' ')}"`;
     if (name === 'size') return `screenshots at window sizes ${args.join(' ') || '800x600, 1280x800, 1920x1080'}`;
     if (name === 'eval') return `run in the page: ${args.join(' ').slice(0, 120)}`;
     if (name === 'shot') return `screenshot${on ? ` of ${on}` : ''}: ${readable(rest.join(' '))}`;
@@ -469,52 +469,25 @@ async function serve(extensions) {
     return text;
   }
 
-  /** What an extension of the app adds and where it shows, read from its manifest: the research a small model does not do. */
-  function extension(name) {
-    if (!name) throw new Error('not done: extension "<name>", for example extension "Kind"');
-    const dirs = [[join(checkout, 'extensions'), 'bundled'], [join(home ?? '', 'plugins'), 'installed']];
-    const manifests = dirs.flatMap(([dir, kind]) =>
+  /** The manifest of an extension of the app, as it is on disk: what it contributes is for the model to read. */
+  function extensionJson(name) {
+    if (!name) throw new Error('not done: extension-json "<name>", for example extension-json "Kind"');
+    const found = [join(checkout, 'extensions'), join(home ?? '', 'plugins')].flatMap(dir =>
       (existsSync(dir) ? readdirSync(dir) : []).flatMap(entry => {
         try {
-          return [{ kind, ...JSON.parse(readFileSync(join(dir, entry, 'package.json'), 'utf8')) }];
+          const raw = readFileSync(join(dir, entry, 'package.json'), 'utf8');
+          const { name, displayName, publisher } = JSON.parse(raw);
+          return [{ raw, names: [name, displayName, `${publisher}.${name}`] }];
         } catch {
           return [];
         }
       }),
     );
-    const wanted = name.toLowerCase().replace(/[^a-z0-9]/g, '');
     const key = text => String(text ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    const manifest =
-      manifests.find(m => [m.name, m.displayName].some(n => key(n) === wanted)) ?? manifests.find(m => [m.name, m.displayName].some(n => key(n).includes(wanted)));
-    if (!manifest) return `"${name}" is not in the app. Bundled or installed: ${manifests.map(m => m.displayName ?? m.name).join(', ')}.\nTo install it: click "Extensions", click "Catalog", install it, wait until look says it is installed, then run this again.`;
-    const { icons: declared = {}, views = {}, menus = {}, commands = [] } = manifest.contributes ?? {};
-    const PLACES = { 'icons/containersList': ['Containers', 'container'], 'icons/image': ['Images', 'image'] };
-    const lines = [`Extension "${manifest.displayName ?? manifest.name}" (${manifest.kind}).`];
-    const used = new Set();
-    for (const [place, entries] of Object.entries(views)) {
-      const [page, thing] = PLACES[place] ?? [];
-      for (const { when = '', icon = '' } of Array.isArray(entries) ? entries : []) {
-        const id = /\$\{(.*)\}/.exec(icon)?.[1] ?? icon;
-        used.add(id);
-        const label = /^\s*([\w./-]+) in (?:container|image)LabelKeys\s*$/.exec(when)?.[1];
-        if (!page) lines.push(`- icon "${id}": used in ${place}, when ${when}`);
-        else if (!label) lines.push(`- icon "${id}": shown in the ${page} list, on rows where: ${when}`);
-        else {
-          lines.push(`- icon "${id}": shown in the ${page} list, on ${thing}s that have the label ${label}`);
-          lines.push(
-            thing === 'container'
-              ? `  To see it: podman run -d --name rvp-${id} --label ${label}=x quay.io/podman/hello, then click "Containers" and look "rvp-${id}"`
-              : `  To see it: printf 'FROM quay.io/podman/hello\\nLABEL ${label}=x\\n' | podman build -t rvp-${id} -f - ., then click "Images" and look "rvp-${id}"`,
-          );
-        }
-      }
-    }
-    for (const id of Object.keys(declared)) if (!used.has(id)) lines.push(`- icon "${id}": declared, not attached to a list (the extension uses it in its own pages or for its provider)`);
-    const menuCount = Object.values(menus).flat().length;
-    if (menuCount || commands.length) lines.push(`- also: ${commands.length} command(s), ${menuCount} menu item(s)`);
-    if (lines.length === 1) lines.push('- it adds no icon.');
-    lines.push('A row that has an icon from an extension says so in look: "Icon from an extension: <id> (drawn)".');
-    return lines.join('\n');
+    const wanted = key(name);
+    const manifest = found.find(m => m.names.some(n => key(n) === wanted)) ?? found.find(m => m.names.some(n => key(n).includes(wanted)));
+    if (!manifest) throw new Error(`no extension "${name}" is bundled or installed. There are: ${found.map(m => m.names[1] ?? m.names[0]).join(', ')}. One that was just installed can take a minute.`);
+    return manifest.raw;
   }
 
   async function look(what, limit = 1200, tries = 3) {
@@ -794,7 +767,7 @@ async function serve(extensions) {
   const commands = {
     // `look cell e59`: the id is what was meant
     look: async (...words) => icons(await look(words.find(word => ID.test(word)) ?? (words.join(' ') || undefined))),
-    extension: async (...words) => extension(words.join(' ').trim()),
+    'extension-json': async (...words) => extensionJson(words.join(' ').trim()),
     click: async (...words) => {
       const { id } = await target(words, true);
       const [label, before] = [what(id), await state()];
@@ -806,7 +779,10 @@ async function serve(extensions) {
       // list of changes does not (the same name was there before, as the choice).
       const same = chosen ? snapshot.replace(/\[ref=/g, '[id=').split('\n').map(parse).filter(p => p.role === chosen.role && p.name === chosen.name) : [];
       const shows = same.length === 1 && same[0].id !== id ? `The control now shows "${chosen.name}" [id=${same[0].id}].` : '';
-      return [answer, shows, await watchedTooltip()].filter(Boolean).join('\n');
+      // what an extension adds is in its manifest: said when one is being installed, which is when it is needed
+      const installing = /^Install (\S+) Extension$/.exec(chosen?.name ?? '')?.[1];
+      const manifest = installing ? `When it is installed: node rvp/pd.mjs extension-json "${installing}" shows what it contributes.` : '';
+      return [answer, shows, await watchedTooltip(), manifest].filter(Boolean).join('\n');
     },
     hover: async (...words) => {
       // a row has no id of its own: it is named, and its buttons are hovered one by one
@@ -990,7 +966,11 @@ async function serve(extensions) {
           );
         }
       }
-      const note = status === 'skipped' ? '' : (await shot(`claim ${n} ${status}`, outlined))[1];
+      // an icon belongs to its row: the id of a button of that row frames the row
+      let rows = [];
+      if (/\bicon/i.test(rest.join(' ')))
+        rows = (await Promise.all(outlined.map(async id => js(`(el => { const r = el?.closest('[role="row"]')?.getBoundingClientRect(); return r ? { x: r.x, y: r.y, width: r.width, height: r.height } : null; })(${AT(await boxOf(id))})`).catch(() => null)))).filter(Boolean);
+      const note = status === 'skipped' ? '' : (await shot(`claim ${n} ${status}`, rows.length ? [] : outlined, rows))[1];
       sinceVerdict = -1; // this command is counted right after
       since = undefined;
       // a second verdict for a claim replaces the first: a wrong one is corrected, not argued about
@@ -1041,7 +1021,8 @@ async function serve(extensions) {
         lost = undefined;
         // a screenshot is not a step of the work: it does not use up the commands
         if (name !== 'shot' && name !== 'claims') sinceVerdict++;
-        if (name !== 'stop' && name !== 'claims') {
+        // extension-json: the manifest and nothing else
+        if (name !== 'stop' && name !== 'claims' && !(name === 'extension-json' && ok)) {
           if (open().length && sinceVerdict >= (verdicts.size ? 8 : 12)) text += `\n${sinceVerdict} commands since the last verdict: record pass, fail or skip now.`;
           text += `\n${left()}`;
         }
