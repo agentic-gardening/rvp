@@ -117,7 +117,7 @@ async function serve(extensions) {
       throw new Error(/unknown ref|not found|no element/i.test(error.message) ? gone(id) : error.message);
     });
   const boxOf = async id => {
-    const { data } = JSON.parse(await ab('get', 'box', `@${id}`, '--json'));
+    const { data } = JSON.parse(await ab('get', 'box', `@${id}`, '--json').catch(() => '{}'));
     if (!data) throw new Error(gone(id));
     return { x: data.x, y: data.y, width: data.width, height: data.height };
   };
@@ -969,7 +969,7 @@ async function serve(extensions) {
       // an icon belongs to its row: the id of a button of that row frames the row
       let rows = [];
       if (/\bicon/i.test(rest.join(' ')))
-        rows = (await Promise.all(outlined.map(async id => js(`(el => { const r = el?.closest('[role="row"]')?.getBoundingClientRect(); return r ? { x: r.x, y: r.y, width: r.width, height: r.height } : null; })(${AT(await boxOf(id))})`).catch(() => null)))).filter(Boolean);
+        rows = (await Promise.all(outlined.map(id => boxOf(id).then(box => js(`(el => { const r = el?.closest('[role="row"]')?.getBoundingClientRect(); return r ? { x: r.x, y: r.y, width: r.width, height: r.height } : null; })(${AT(box)})`)).catch(() => null)))).filter(Boolean); // an id that is gone must not lose the verdict
       const note = status === 'skipped' ? '' : (await shot(`claim ${n} ${status}`, rows.length ? [] : outlined, rows))[1];
       sinceVerdict = -1; // this command is counted right after
       since = undefined;
