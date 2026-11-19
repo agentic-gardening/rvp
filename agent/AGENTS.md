@@ -12,8 +12,7 @@ node rvp/pd.mjs click "Images"            click by name (by id when a name is no
 node rvp/pd.mjs hover "Save Image"        mouse on it: prints its tooltip. On a row: the tooltip of each button
 node rvp/pd.mjs fill "search images" "hello"   type into a field
 node rvp/pd.mjs press Enter               press a key
-node rvp/pd.mjs shot e432 "what it shows" screenshot only, element e432 outlined in red: it clicks nothing
-node rvp/pd.mjs pass 1 e432 "what you saw"    claim 1 is true (e432: the element that shows it)
+node rvp/pd.mjs pass 1 e432 "what you saw"    claim 1 is true (e432: the element that shows it, for the screenshot)
 node rvp/pd.mjs fail 1 e432 "what you saw instead"   claim 1 is false: the app does not do it
 node rvp/pd.mjs skip 1 "why"                  claim 1 could not be checked
 node rvp/pd.mjs eval e432 "el => el.title"   JavaScript on one element

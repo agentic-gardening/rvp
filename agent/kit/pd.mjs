@@ -511,8 +511,9 @@ async function serve(extensions) {
     return locator;
   };
   /** The element a command names: an id from look, or the visible name of something in the window. */
-  async function target(words) {
-    const given = words.join(' ').trim().replace(/^"(.*)"$/, '$1');
+  async function target(words, click = false) {
+    // a name and an id together ("Run Image e1259"): the id is what was meant
+    const given = words.flatMap(word => word.split(' ')).find(word => ID.test(word)) ?? words.join(' ').trim().replace(/^"(.*)"$/, '$1');
     if (ID.test(given)) return { id: given, locator: await element(given) };
     if (!given) throw new Error('say what: a name such as "Images", or an id such as e12.');
     let lines, all;
@@ -523,7 +524,10 @@ async function serve(extensions) {
     const named = (name, role) => {
       const wanted = name.toLowerCase().replace(/^"(.*)"$/, '$1');
       const exact = all.filter(p => p.name.toLowerCase() === wanted && (!role || p.role === role));
-      return exact.length ? exact : all.filter(p => p.name.toLowerCase().includes(wanted) && (!role || p.role === role));
+      const part = all.filter(p => p.name.toLowerCase().includes(wanted) && (!role || p.role === role));
+      // a click on the name of a row means its item: the button "name id tag" in it opens the page, the row opens nothing
+      if (click && exact.length && !exact.some(p => ACT.test(p.role))) return part;
+      return exact.length ? exact : part;
     };
     const [, role, rest] = /^(\w+) (.+)$/.exec(given) ?? []; // click link "Extensions"
     let found = [];
@@ -649,7 +653,7 @@ async function serve(extensions) {
     // `look cell e59`: the id is what was meant
     look: (...words) => look(words.find(word => ID.test(word)) ?? (words.join(' ') || undefined)),
     click: async (...words) => {
-      const { id, locator } = await target(words);
+      const { id, locator } = await target(words, true);
       const [label, found, before] = [what(id), describe(id), await state()];
       // only when the click is in a dialog: anywhere else the mouse must stay where it is (an open menu closes without it)
       const inDialog = await locator.evaluate(el => !!el.closest('[role="dialog"],[role="alertdialog"]')).catch(() => false);
@@ -731,7 +735,9 @@ async function serve(extensions) {
     },
     shot: async (...args) => {
       const [outlined, name] = ids(args);
-      return `screenshot only, nothing was clicked: saved ${(await shot(readable(name.join(' ')) || 'screenshot', outlined)).join('')}`;
+      // not in the instructions any more: a model used it as its click, seven times in one run
+      await shot(readable(name.join(' ')) || 'screenshot', outlined);
+      return `Screenshots are taken for you at each verdict. Nothing was clicked.${outlined[0] ? ` To click it: click ${outlined[0]}` : ''}`;
     },
     restart: async (...folders) => (await stop(), await start(folders), `restarted with ${folders.length} extension folder(s).`),
     stop: async () => (await stop(), setTimeout(() => process.exit(0), 100), 'stopped.'),
