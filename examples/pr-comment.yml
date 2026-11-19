@@ -5,7 +5,7 @@
 #   /rvp macos check that ...          (linux by default; windows and macos also work)
 #   /rvp arm check that ...            (Linux on arm64)
 #   /rvp model=qwen3.5:4b check that ...   (another Ollama model; can be combined with the runner)
-#   /rvp thinking=medium check that ...   (how much the model reasons before each command: off, minimal, low, medium, high; low by default)
+#   /rvp thinking=medium check that ...   (how much the model reasons before each command: off, minimal, low, medium, high, xhigh, max; low by default)
 #
 # The result comes back as a comment on the same pull request.
 #
@@ -60,7 +60,7 @@ jobs:
             text=${text#"${text%%[! ]*}"} # spaces left after the option
           done
           [[ -z "$model" || "$model" =~ ^[A-Za-z0-9._/-]+(:[A-Za-z0-9._-]+)?$ ]] || { echo "bad model name"; exit 1; }
-          [[ "$thinking" =~ ^(off|minimal|low|medium|high)$ ]] || { echo "bad thinking level"; exit 1; }
+          [[ "$thinking" =~ ^(off|minimal|low|medium|high|xhigh|max)$ ]] || { echo "bad thinking level"; exit 1; }
           [ -n "$text" ] || { echo "nothing to verify"; exit 1; }
           { echo "runner=$runner"; echo "model=$model"; echo "thinking=$thinking"; echo "instruction=$text"; } >> "$GITHUB_OUTPUT"
           gh api "$REACTIONS" -f content=eyes > /dev/null || true

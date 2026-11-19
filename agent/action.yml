@@ -21,7 +21,7 @@ inputs:
     description: Take every screenshot in light and in dark theme
     default: 'true'
   thinking:
-    description: How much the model reasons before each command (off, minimal, low, medium, high). More is slower.
+    description: How much the model reasons before each command (off, minimal, low, medium, high, xhigh, max). More is slower.
     default: low
   token:
     description: Read-only token, used once to read the PR title and body
@@ -45,7 +45,7 @@ runs:
         MINUTES: ${{ inputs.timeout-minutes }}
         THINKING: ${{ inputs.thinking }}
       run: |
-        [[ "$THINKING" =~ ^(off|minimal|low|medium|high)$ ]] || { echo "thinking must be off, minimal, low, medium or high"; exit 1; }
+        [[ "$THINKING" =~ ^(off|minimal|low|medium|high|xhigh|max)$ ]] || { echo "thinking must be off, minimal, low, medium, high, xhigh or max"; exit 1; }
         [[ "$PR" =~ ^[0-9]+$ && "$MINUTES" =~ ^[0-9]+$ ]] || { echo "pr and timeout-minutes must be numbers"; exit 1; }
         [[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "bad repo"; exit 1; }
         [[ "$MODEL" =~ ^[A-Za-z0-9._/-]+(:[A-Za-z0-9._-]+)?$ ]] || { echo "bad model"; exit 1; }

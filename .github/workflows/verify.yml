@@ -28,7 +28,7 @@ on:
       thinking:
         description: How much the model reasons before each command
         type: choice
-        options: ['off', minimal, low, medium, high]
+        options: ['off', minimal, low, medium, high, xhigh, max]
         default: low
       timeout-minutes:
         description: Time the model may spend
