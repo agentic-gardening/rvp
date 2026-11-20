@@ -1,6 +1,22 @@
 // src/result.ts
 import { lstatSync, openSync, readFileSync, readSync, closeSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+var environment = (raw) => {
+  if (!raw || typeof raw !== "object")
+    return;
+  const text = (v) => typeof v === "string" ? v.replace(ANSI, "").replace(/[^\w .,:+()/-]/g, "").slice(0, 80) : "";
+  return {
+    commit: /^[0-9a-f]{7,40}$/.test(raw.commit) ? raw.commit : "",
+    app: text(raw.app),
+    podman: text(raw.podman),
+    image: text(raw.image),
+    settings: text(raw.settings),
+    rvp: text(raw.rvp),
+    minutes: Number.isInteger(raw.minutes) && raw.minutes >= 0 && raw.minutes < 1e4 ? raw.minutes : 0
+  };
+};
+var lines = (list, max, length) => (Array.isArray(list) ? list : []).filter((s) => typeof s === "string").slice(0, max).map((s) => s.replace(ANSI, "").slice(0, length));
+var observed = (list) => (Array.isArray(list) ? list : []).filter((o) => typeof o?.line === "string" && typeof o.step === "string").slice(0, 2).map((o) => ({ line: o.line.replace(ANSI, "").slice(0, 240), step: o.step.replace(ANSI, "").slice(0, 120) }));
 var MEDIA = /^media\/[\w.-]+\.png$/;
 var MAX_CHECKS = 50;
 var MAX_BYTES = 10 * 1024 * 1024;
@@ -29,6 +45,8 @@ function finish(outDir, env) {
       status: c.status,
       ...typeof c.reason === "string" ? { reason: c.reason.replace(ANSI, "").slice(0, 2000) } : {},
       screenshots: (Array.isArray(c.screenshots) ? c.screenshots : []).filter((f) => typeof f === "string" && MEDIA.test(f)),
+      ...Array.isArray(c.observed) && c.observed.length ? { observed: observed(c.observed) } : {},
+      ...Array.isArray(c.steps) && c.steps.length ? { steps: lines(c.steps, 8, 120) } : {},
       ...Array.isArray(c.seen) ? { seen: seen(c.seen) } : {}
     }));
   } catch {}
@@ -43,6 +61,14 @@ ${(read(join(outDir, "agent.log")) ?? "").slice(-1500)}`);
     outcome: outcome(checks),
     checks,
     notes: withoutIds(notes.replace(ANSI, "")).slice(0, 4000),
+    ...(() => {
+      try {
+        const env = environment(JSON.parse(read(join(outDir, "environment.json")) ?? "null"));
+        return env ? { environment: env } : {};
+      } catch {
+        return {};
+      }
+    })(),
     facts: ["speed.txt", "looked.txt"].flatMap((file) => (read(join(outDir, file)) ?? "").split(`
 `).filter((line) => line.trim()).slice(0, 1)).map((line) => line.replace(ANSI, "").slice(0, 200))
   };

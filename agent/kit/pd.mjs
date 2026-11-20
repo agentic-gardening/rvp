@@ -910,6 +910,20 @@ async function serve(extensions) {
   // 20: at one command a minute, 12 closed a claim the moment the model reached the page that proves it
   const MINUTES = Number(process.env.RVP_CLAIM_MINUTES) || 30;
   let said = ''; // every answer so far, to check a pass against what the model was really told
+  const outputs = []; // the same answers with the action that got them: a verdict shows the line it quotes
+  let recent = []; // the actions that worked since the last verdict: the steps to reproduce it
+  /** The lines the tool printed that a reason quotes (four words in a row), newest first, with their action. */
+  const observed = reason => {
+    const told = reason.toLowerCase().split(/\s+/);
+    const runs = told.map((_, i) => told.slice(i, i + 4).join(' ')).slice(0, Math.max(1, told.length - 3));
+    const found = [];
+    for (const { step, text } of [...outputs].reverse())
+      for (const line of text.split('\n')) {
+        const clean = line.replace(/ \[id=\w+\]/g, '').trim();
+        if (clean.length > 8 && told.length >= 4 && runs.some(run => clean.toLowerCase().includes(run)) && !found.some(f => f.line === clean)) found.push({ line: clean.slice(0, 240), step });
+      }
+    return found.slice(0, 2);
+  };
   let since; // when the work on the current claim started (its first action on the app)
   const giveUp = async why => {
     const n = open()[0];
@@ -982,8 +996,10 @@ async function serve(extensions) {
       // the last hovers, then the window at the verdict
       // a verdict that replaces one (often one the tool closed itself) keeps the screenshots gathered for it
       const earlier = (verdicts.get(n)?.screenshots ?? []).filter(file => !/-not-decided\./.test(file));
-      verdicts.set(n, { claim, status, reason: readable(rest.join(' ')), screenshots: [...earlier, ...moments.slice(-8).flat()].slice(-16) });
+      const steps = recent.filter((step, i) => step !== recent[i - 1]).slice(-8);
+      verdicts.set(n, { claim, status, reason: readable(rest.join(' ')), observed: observed(rest.join(' ')), steps, screenshots: [...earlier, ...moments.slice(-8).flat()].slice(-16) });
       moments = [];
+      recent = [];
       writeFileSync(join(out, 'checks.json'), JSON.stringify(claims.map((_, i) => verdicts.get(i + 1)).filter(Boolean), null, 2));
       // for the step that runs the model: nothing is left to do
       if (!open().length) writeFileSync(join(out, 'done'), '');
@@ -1032,7 +1048,11 @@ async function serve(extensions) {
           if (open().length && sinceVerdict >= (verdicts.size ? 8 : 20)) text += `\n${sinceVerdict} commands since the last verdict: record pass, fail or skip now.`;
           text += `\n${left()}`;
         }
-        if (!['pass', 'fail', 'skip', 'claims'].includes(name)) said += `${text.toLowerCase()}\n`;
+        if (!['pass', 'fail', 'skip', 'claims'].includes(name)) {
+          said += `${text.toLowerCase()}\n`;
+          outputs.push({ step: step ?? [name, ...rest].join(' ').slice(0, 80), text });
+          if (ok && step) recent.push(step.replace(/\s+/g, ' ').slice(0, 120));
+        }
         appendFileSync(join(out, 'actions.log'), `$ ${[name, ...rest].join(' ')}\n${text.slice(0, 600)}\n\n`);
         // one line per action, for whoever watches the run
         const lines = text.split('\n');

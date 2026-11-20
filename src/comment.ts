@@ -6,16 +6,23 @@ import { basename, join } from 'node:path';
 
 import { check, type Result } from './result';
 
-const ICON = { passed: '✅', failed: '❌', skipped: '⚠️' } as const;
+// No check mark and no cross: a shield for a claim that holds, a bug for one that does not (a bug was found),
+// roadworks for what was not checked, a puzzle piece when only part was.
+const ICON = { passed: '🛡️', failed: '🐛', skipped: '🚧' } as const;
 
 /** The words of the whole run: the worst claim decides, and a claim nobody checked is not a verified one. */
 const verdict = (result: Result): string => {
   const count = (status: string): number => result.checks.filter(c => c.status === status).length;
-  const [passed, failed, skipped, all] = [count('passed'), count('failed'), count('skipped'), result.checks.length];
-  if (failed) return `❌ **Not verified**: ${failed} of ${all} claim${all > 1 ? 's' : ''} ${failed > 1 ? 'do' : 'does'} not hold.`;
-  if (!passed) return '⚠️ **Not checked**: the model gave no verdict.';
-  if (skipped) return `⚠️ **Partially verified**: ${passed} of ${all} claims hold, ${skipped} could not be checked.`;
-  return `✅ **Verified**: ${all === 1 ? 'the claim holds' : `${all} of ${all} claims hold`}.`;
+  if (count('failed')) return '🐛 Not verified';
+  if (!count('passed')) return '🚧 Not checked';
+  return count('skipped') ? '🧩 Partially verified' : '🛡️ Verified';
+};
+
+/** Who says so: the tool measured it in the app, the model saw it on the screenshot, or the model only states it. */
+const evidence = (c: Result['checks'][number]): string => {
+  if (c.status === 'skipped') return 'not checked';
+  const grades = [c.observed?.length ? '📏 measured in the app' : '', c.seen?.some(s => s.shows) ? '👁️ seen on the screenshot' : ''].filter(Boolean);
+  return grades.length ? grades.join(' · ') : '💬 stated by the model only';
 };
 
 const strip = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, '').replace(/[\u0000-\u0008\u000b-\u001f]/g, '');
@@ -34,36 +41,60 @@ export const block = (s: string, max: number, lang = ''): string =>
   `~~~~${lang}\n${strip(s).slice(0, max).replace(/~~~/g, '~~ ~')}\n~~~~`;
 
 export function render(result: Result, url: (media: string) => string, runUrl: string, actions: string, plan = ''): string {
-  const overall = verdict(result);
+  const env = result.environment;
+  const [passed, all] = [result.checks.filter(c => c.status === 'passed').length, result.checks.length];
   const out: string[] = [
-    `## rvp: ${overall.split(':')[0].replace(/\*\*/g, '')}`,
-    '',
-    `Checked on ${inline(result.runner, 30)} with the build of this pull request running, by \`${inline(result.model, 60)}\`.`,
+    // what a reviewer needs before reading on: verdict, how many claims, which commit, where, how long
+    [`## rvp: ${verdict(result)}`, `${passed} of ${all} claim${all > 1 ? 's' : ''}`, env?.commit ? `\`${env.commit.slice(0, 7)}\`` : '', inline(result.runner, 30), env?.minutes ? `${env.minutes} min` : '']
+      .filter(Boolean)
+      .join(' · '),
     '',
     `> ${inline(result.instruction, 600)}`,
   ];
+  if (all) out.push('', '| # | Claim | Result | Evidence |', '|---|---|---|---|', ...result.checks.map((c, i) => `| ${i + 1} | ${inline(c.claim, 120)} | ${ICON[c.status]} | ${evidence(c)} |`));
   const skipped: string[] = [];
   result.checks.forEach((c, i) => {
     if (c.status === 'skipped') {
-      skipped.push(`- ${inline(c.claim)}${c.reason ? `: ${inline(c.reason, 300)}` : ''}`, ...folded(groups(c.screenshots), url));
+      skipped.push(`- ${i + 1}. ${inline(c.claim)}${c.reason ? `: ${inline(c.reason, 300)}` : ''}`, ...folded(groups(c.screenshots), url));
       return;
     }
-    out.push('', `**${i + 1}. ${inline(c.claim)}** ${ICON[c.status]}`);
-    if (c.reason) out.push('', inline(c.reason, 600));
+    out.push('', `### ${i + 1}. ${inline(c.claim)} ${ICON[c.status]}`, '');
+    if (c.reason) out.push(`${c.observed?.length ? '' : '💬 '}${inline(c.reason, 600)}`, '');
+    for (const o of c.observed ?? []) out.push(`📏 **Observed:** ${inline(o.line, 240)}  `);
+    if (c.steps?.length) out.push(`**Steps:** ${c.steps.map(step => inline(step, 120)).join(' → ')}`);
     out.push(...pictures(c, url));
   });
-  if (skipped.length) out.push('', '**Not checked:**', '', ...skipped);
-  out.push('', '### Verdict', overall, ...result.checks.map(c => `- ${ICON[c.status]} ${inline(c.claim)}`));
+  out.push('', '### Not checked', '', ...skipped, `- Only ${inline(result.runner, 30) || 'one platform'} was run, once: a rerun can differ.`);
+  if (env)
+    out.push(
+      '',
+      '<details><summary>Environment</summary>',
+      '',
+      [
+        env.commit ? `commit \`${env.commit.slice(0, 12)}\` (head of the pull request)` : '',
+        env.app ? `Podman Desktop ${env.app}` : '',
+        env.podman ? `podman ${env.podman}` : '',
+        env.image ? `runner image ${env.image}` : '',
+        `model \`${inline(result.model, 60)}\`${env.settings ? `, ${env.settings}` : ''}`,
+        env.rvp ? `rvp \`${env.rvp}\`` : '',
+      ]
+        .filter(Boolean)
+        .join(' · '),
+      '',
+      '</details>',
+    );
   if (plan.trim()) out.push('', '<details><summary>What the agent planned</summary>', '', block(plan, 3000), '', '</details>');
-  if (result.notes.trim()) out.push('', '<details><summary>Agent notes</summary>', '', block(result.notes, 3000), '', '</details>');
   const steps = actions.split('\n').filter(line => line.trim()).slice(0, 80);
-  if (steps.length) out.push('', `<details><summary>What the agent did (${steps.length} steps)</summary>`, '', ...steps.map((step, i) => `${i + 1}. ${inline(step, 300)}`), '', '</details>');
+  if (steps.length) out.push('', `<details><summary>All ${steps.length} steps</summary>`, '', ...steps.map((step, i) => `${i + 1}. ${inline(step, 300)}`), '', '</details>');
+  if (result.notes.trim()) out.push('', '<details><summary>Agent notes</summary>', '', block(result.notes, 3000), '', '</details>');
   const run = /\/runs\/(\d+)/.exec(runUrl)?.[1];
   out.push(
     '',
     '---',
-    `<sub>rvp · runner \`${inline(result.runner, 30)}\` · model \`${inline(result.model, 60)}\`${runUrl ? ` · [run ${run ?? ''} and result folder](${runUrl})` : ''}${(result.facts ?? []).map(fact => ` · ${inline(fact, 200)}`).join('')}</sub>`,
-    '<sub>A local model drove a build of this pull request and recorded these verdicts itself. They are its judgement, not a proof: check the screenshots and the action log before relying on them.</sub>',
+    `<sub>rvp · model \`${inline(result.model, 60)}\`${runUrl ? ` · [run ${run ?? ''} and result folder](${runUrl})` : ''}${(result.facts ?? []).map(fact => ` · ${inline(fact, 200)}`).join('')}</sub>`,
+    '<sub>A local model drove a build of this pull request and recorded these verdicts itself. 📏 was measured by the tool in the app; 👁️ and 💬 are the model\'s judgement, not a proof.</sub>',
+    // for another tool: the outcome without parsing the text. Only fixed words and a commit that was checked to be hex.
+    `<!-- rvp-result: ${JSON.stringify({ outcome: result.outcome, commit: env?.commit ?? '', claims: result.checks.map(c => c.status) })} -->`,
   );
   return out.join('\n').slice(0, 60_000);
 }
@@ -185,6 +216,39 @@ async function main(): Promise<void> {
   // where to comment comes from the workflow inputs, never from result.json
   const comment = await api(input('token'), 'POST', `/repos/${repo}/issues/${pr}/comments`, { body });
   console.log(`commented: ${comment.html_url}`);
+  await checkRun(input('token'), repo, pr, result, comment.html_url);
+}
+
+/**
+ * The verdict in the pull request's list of checks. Only this job can write it (`checks: write`); the job that
+ * runs the pull request's code and the model has no such right.
+ * The commit comes from GitHub, never from the result folder, and the check is put on it only when it is the
+ * commit that was tested: a push made during the run must not get a verdict about older code.
+ */
+async function checkRun(token: string, repo: string, pr: number, result: Result, commentUrl: string): Promise<void> {
+  try {
+    const head: string = (await api(token, 'GET', `/repos/${repo}/pulls/${pr}`)).head.sha;
+    const tested = result.environment?.commit;
+    if (tested !== head) return console.log(`no check run: the tested commit (${tested || 'unknown'}) is not the head of the pull request (${head})`);
+    const words = verdict(result);
+    const conclusion = words.includes('Not verified') ? 'failure' : words.includes('Verified') && !words.includes('Partially') ? 'success' : 'neutral';
+    const passed = result.checks.filter(c => c.status === 'passed').length;
+    const run = await api(token, 'POST', `/repos/${repo}/check-runs`, {
+      name: 'rvp',
+      head_sha: head,
+      status: 'completed',
+      conclusion,
+      details_url: commentUrl,
+      output: {
+        title: `${words.replace(/^\S+ /, '')}: ${passed} of ${result.checks.length} claims`,
+        summary: [`> ${inline(result.instruction, 600)}`, '', ...result.checks.map((c, i) => `${i + 1}. ${ICON[c.status]} ${inline(c.claim)}`), '', `[The comment with the evidence](${commentUrl})`].join('\n'),
+      },
+    });
+    console.log(`check run: ${run.html_url} (${conclusion})`);
+  } catch (error) {
+    // no checks: write permission, or a token that is not allowed to create check runs: the comment is enough
+    console.log(`no check run: ${String((error as Error).message).slice(0, 200)}`);
+  }
 }
 
 if (!process.env.BUN_TEST) {

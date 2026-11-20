@@ -153,6 +153,7 @@ runs:
         rm -rf pd && git init -q pd
         git -C pd fetch -q --depth 1 "https://github.com/$REPO" "refs/pull/$PR/head"
         git -C pd checkout -q FETCH_HEAD
+        git -C pd rev-parse HEAD > "$RVP_OUT/commit.txt"
 
     - name: install pnpm
       uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
@@ -290,6 +291,7 @@ runs:
         # the full path: a small model given "rvp/TASK.md" may look for it somewhere else
         prompt="Read the file $here/rvp/TASK.md and carry out the task it describes. Run every command from this folder."
         end=$((SECONDS + MINUTES * 60))
+        date +%s > "$RVP_OUT/started.txt"
         # a small model often ends its turn early: while a claim has no verdict, send it back to work
         for try in 1 2 3 4; do
           [ "$SECONDS" -lt "$end" ] || break
@@ -320,7 +322,24 @@ runs:
         RVP_MODEL: ${{ inputs.model }}
         RVP_INSTRUCTION: ${{ inputs.instruction }}
         LOOK: ${{ inputs.look-at-screenshots }}
+        TEMPERATURE: ${{ inputs.temperature }}
+        THINKING: ${{ inputs.thinking }}
       run: |
+        # what was tested, for the comment: commit, versions, settings, and how long the model worked
+        node -e '
+          const fs = require("fs"), sh = c => { try { return require("child_process").execSync(c, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { return ""; } };
+          const read = f => { try { return fs.readFileSync(f, "utf8").trim(); } catch { return ""; } };
+          const out = process.env.RVP_OUT, started = Number(read(out + "/started.txt"));
+          let app = ""; try { app = require(process.cwd() + "/pd/package.json").version; } catch {}
+          fs.writeFileSync(out + "/environment.json", JSON.stringify({
+            commit: read(out + "/commit.txt"), app, podman: sh("podman --version").replace(/^podman version /, ""),
+            image: [process.env.ImageOS, process.env.ImageVersion].filter(Boolean).join(" "),
+            settings: "temperature " + process.env.TEMPERATURE + ", thinking " + process.env.THINKING,
+            // the folder of a pinned action is named by its commit
+            rvp: require("path").basename(require("path").dirname(process.env.GITHUB_ACTION_PATH)).slice(0, 12),
+            minutes: started ? Math.round((Date.now() / 1000 - started) / 60) : 0,
+          }));
+        ' || true
         if [ -f pd/rvp/pd.mjs ]; then
           # closing the app saves the video and the trace
           (cd pd && node rvp/pd.mjs stop) || true

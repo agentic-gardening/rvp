@@ -7,6 +7,10 @@ export type Check = {
   status: 'passed' | 'failed' | 'skipped';
   reason?: string;
   screenshots: string[];
+  /** The lines the tool printed that the reason quotes, with the action that printed them: measured, not judged. */
+  observed?: { line: string; step: string }[];
+  /** The actions that worked between the previous verdict and this one. */
+  steps?: string[];
   /** What the model answered when it was shown a screenshot of this claim: does the picture show it? */
   seen?: { file: string; shows: boolean; says: string }[];
 };
@@ -22,7 +26,30 @@ export type Result = {
   notes: string;
   /** Facts about the run for the footer: how fast the model was, how long the screenshot checks took. */
   facts?: string[];
+  /** What was tested: commit of the pull request, versions, settings. */
+  environment?: Environment;
 };
+
+export type Environment = { commit: string; app: string; podman: string; image: string; settings: string; rvp: string; minutes: number };
+
+/** Short plain values only: the file is written on a machine that ran the pull request's code. */
+const environment = (raw: any): Environment | undefined => {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const text = (v: unknown): string => (typeof v === 'string' ? v.replace(ANSI, '').replace(/[^\w .,:+()/-]/g, '').slice(0, 80) : '');
+  return {
+    commit: /^[0-9a-f]{7,40}$/.test(raw.commit) ? raw.commit : '',
+    app: text(raw.app), podman: text(raw.podman), image: text(raw.image), settings: text(raw.settings), rvp: text(raw.rvp),
+    minutes: Number.isInteger(raw.minutes) && raw.minutes >= 0 && raw.minutes < 10_000 ? raw.minutes : 0,
+  };
+};
+
+const lines = (list: unknown, max: number, length: number): string[] =>
+  (Array.isArray(list) ? list : []).filter((s): s is string => typeof s === 'string').slice(0, max).map(s => s.replace(ANSI, '').slice(0, length));
+const observed = (list: unknown): NonNullable<Check['observed']> =>
+  (Array.isArray(list) ? list : [])
+    .filter((o: any) => typeof o?.line === 'string' && typeof o.step === 'string')
+    .slice(0, 2)
+    .map((o: any) => ({ line: o.line.replace(ANSI, '').slice(0, 240), step: o.step.replace(ANSI, '').slice(0, 120) }));
 
 const MEDIA = /^media\/[\w.-]+\.png$/;
 const MAX_CHECKS = 50;
@@ -62,6 +89,8 @@ export function finish(outDir: string, env: Record<string, string | undefined>):
         status: c.status,
         ...(typeof c.reason === 'string' ? { reason: c.reason.replace(ANSI, '').slice(0, 2000) } : {}),
         screenshots: (Array.isArray(c.screenshots) ? c.screenshots : []).filter((f: unknown) => typeof f === 'string' && MEDIA.test(f)),
+        ...(Array.isArray(c.observed) && c.observed.length ? { observed: observed(c.observed) } : {}),
+        ...(Array.isArray(c.steps) && c.steps.length ? { steps: lines(c.steps, 8, 120) } : {}),
         ...(Array.isArray(c.seen) ? { seen: seen(c.seen) } : {}),
       }));
   } catch {
@@ -80,6 +109,14 @@ export function finish(outDir: string, env: Record<string, string | undefined>):
     checks,
     notes: withoutIds(notes.replace(ANSI, '')).slice(0, 4000),
     // one line each, written by the last step of the agent job
+    ...(() => {
+      try {
+        const env = environment(JSON.parse(read(join(outDir, 'environment.json')) ?? 'null'));
+        return env ? { environment: env } : {};
+      } catch {
+        return {};
+      }
+    })(),
     facts: ['speed.txt', 'looked.txt'].flatMap(file => (read(join(outDir, file)) ?? '').split('\n').filter(line => line.trim()).slice(0, 1)).map(line => line.replace(ANSI, '').slice(0, 200)),
   };
   writeFileSync(join(outDir, 'result.json'), JSON.stringify(result, null, 2));
@@ -128,6 +165,8 @@ export function check(outDir: string): Result {
       status: c.status,
       ...(c.reason === undefined ? {} : { reason: str(c.reason, 'reason') }),
       screenshots,
+      ...(Array.isArray(c.observed) && c.observed.length ? { observed: observed(c.observed) } : {}),
+      ...(Array.isArray(c.steps) && c.steps.length ? { steps: lines(c.steps, 8, 120) } : {}),
       // only about files that passed the media check above
       ...(Array.isArray(c.seen) ? { seen: seen(c.seen).filter(s => screenshots.includes(s.file)) } : {}),
     };
@@ -143,5 +182,6 @@ export function check(outDir: string): Result {
     checks,
     notes: str(raw.notes, 'notes'),
     ...(Array.isArray(raw.facts) ? { facts: raw.facts.filter((f: unknown) => typeof f === 'string').slice(0, 4) } : {}),
+    ...(environment(raw.environment) ? { environment: environment(raw.environment) } : {}),
   };
 }

@@ -90,6 +90,7 @@ jobs:
     permissions:
       contents: write # screenshots are committed to the `media` branch of this repository
       pull-requests: write # the result comment
+      checks: write # the verdict in the pull request's list of checks; only this job has it, never the agent job
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
