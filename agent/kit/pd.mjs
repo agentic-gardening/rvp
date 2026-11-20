@@ -486,7 +486,7 @@ async function serve(extensions) {
     const key = text => String(text ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
     const wanted = key(name);
     const manifest = found.find(m => m.names.some(n => key(n) === wanted)) ?? found.find(m => m.names.some(n => key(n).includes(wanted)));
-    if (!manifest) throw new Error(`no extension "${name}" is bundled or installed. There are: ${found.map(m => m.names[1] ?? m.names[0]).join(', ')}. One that was just installed can take a minute.`);
+    if (!manifest) throw new Error(`"${name}" is not bundled or installed (there are: ${found.map(m => m.names[1] ?? m.names[0]).join(', ')}). To install it: click "Extensions", click "Catalog", fill "search extensions" "${name}", click its "Install ... Extension" button, then run this again (it can take a minute).`);
     return manifest.raw;
   }
 
@@ -1020,7 +1020,7 @@ async function serve(extensions) {
         if (lost && name !== 'stop') text = `Your previous command (${lost.command}) was done; its answer, which your timeout cut:\n${lost.text}\n\nAnswer to this command:\n${text}`;
         lost = undefined;
         // a screenshot is not a step of the work: it does not use up the commands
-        if (name !== 'shot' && name !== 'claims' && name !== 'extension-json') sinceVerdict++; // reading is not acting on the app
+        if (name !== 'shot' && name !== 'claims') sinceVerdict++;
         // extension-json: the manifest and nothing else
         if (name !== 'stop' && name !== 'claims' && !(name === 'extension-json' && ok)) {
           if (open().length && sinceVerdict >= (verdicts.size ? 8 : 20)) text += `\n${sinceVerdict} commands since the last verdict: record pass, fail or skip now.`;
