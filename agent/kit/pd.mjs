@@ -980,7 +980,9 @@ async function serve(extensions) {
       // a second verdict for a claim replaces the first: a wrong one is corrected, not argued about
       const again = verdicts.has(n);
       // the last hovers, then the window at the verdict
-      verdicts.set(n, { claim, status, reason: readable(rest.join(' ')), screenshots: moments.slice(-8).flat() });
+      // a verdict that replaces one (often one the tool closed itself) keeps the screenshots gathered for it
+      const earlier = (verdicts.get(n)?.screenshots ?? []).filter(file => !/-not-decided\./.test(file));
+      verdicts.set(n, { claim, status, reason: readable(rest.join(' ')), screenshots: [...earlier, ...moments.slice(-8).flat()].slice(-16) });
       moments = [];
       writeFileSync(join(out, 'checks.json'), JSON.stringify(claims.map((_, i) => verdicts.get(i + 1)).filter(Boolean), null, 2));
       // for the step that runs the model: nothing is left to do

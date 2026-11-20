@@ -28,7 +28,8 @@ function finish(outDir, env) {
       claim: c.claim.slice(0, 300),
       status: c.status,
       ...typeof c.reason === "string" ? { reason: c.reason.replace(ANSI, "").slice(0, 2000) } : {},
-      screenshots: (Array.isArray(c.screenshots) ? c.screenshots : []).filter((f) => typeof f === "string" && MEDIA.test(f))
+      screenshots: (Array.isArray(c.screenshots) ? c.screenshots : []).filter((f) => typeof f === "string" && MEDIA.test(f)),
+      ...Array.isArray(c.seen) ? { seen: seen(c.seen) } : {}
     }));
   } catch {}
   const notes = read(join(outDir, "notes.md")) ?? (checks.length ? "" : `No check was produced. End of the agent log:
@@ -41,11 +42,14 @@ ${(read(join(outDir, "agent.log")) ?? "").slice(-1500)}`);
     instruction: env.RVP_INSTRUCTION ?? "",
     outcome: outcome(checks),
     checks,
-    notes: withoutIds(notes.replace(ANSI, "")).slice(0, 4000)
+    notes: withoutIds(notes.replace(ANSI, "")).slice(0, 4000),
+    facts: ["speed.txt", "looked.txt"].flatMap((file) => (read(join(outDir, file)) ?? "").split(`
+`).filter((line) => line.trim()).slice(0, 1)).map((line) => line.replace(ANSI, "").slice(0, 200))
   };
   writeFileSync(join(outDir, "result.json"), JSON.stringify(result, null, 2));
   return result;
 }
+var seen = (list) => list.filter((s) => typeof s?.file === "string" && MEDIA.test(s.file) && typeof s.says === "string").slice(0, 8).map((s) => ({ file: s.file, shows: s.shows === true, says: s.says.replace(ANSI, "").slice(0, 300) }));
 
 // src/finish.ts
 var result = finish(process.argv[2], process.env);

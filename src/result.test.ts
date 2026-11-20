@@ -27,11 +27,40 @@ test('finish turns recorded checks into a result the comment job accepts', () =>
   );
   const result = finish(dir, { RVP_PR: '12', RVP_REPO: 'o/r', RVP_RUNNER: 'linux', RVP_MODEL: 'm', RVP_INSTRUCTION: 'i' });
   expect(result.outcome).toBe('mixed');
+  expect(result.facts).toEqual([]);
   expect(result.checks).toEqual([
     { claim: 'scrollbar is absent', status: 'passed', reason: 'no overflow', screenshots: ['media/a.png'] },
     { claim: 'three extensions install', status: 'failed', reason: 'boom', screenshots: [] },
   ]);
   expect(check(dir)).toEqual(result);
+});
+
+test('one screenshot is shown for a claim: the one the model said shows it; the others are folded', () => {
+  const body = render(
+    {
+      pr: 1, repo: 'o/r', runner: 'Linux arm64', model: 'm', instruction: 'i', outcome: 'pass', notes: '', facts: ['screenshot checks: 2 pictures in 1 min 40 s'],
+      checks: [
+        {
+          claim: 'the tooltip shows', status: 'passed', reason: 'styled tooltip',
+          screenshots: ['media/01-hover-run.png', 'media/02-claim-1-passed.png', 'media/02-claim-1-passed.dark.png'],
+          seen: [{ file: 'media/02-claim-1-passed.png', shows: false, says: 'No tooltip.' }, { file: 'media/01-hover-run.png', shows: true, says: 'Yes, a tooltip.' }],
+        },
+        { claim: 'never looked at', status: 'skipped', reason: 'no time', screenshots: [] },
+      ],
+    },
+    m => m,
+    'https://github.com/o/r/actions/runs/42',
+    '',
+  );
+  expect(body).toContain('## rvp: ⚠️ Partially verified');
+  expect(body).toContain('**1. the tooltip shows** ✅');
+  expect(body).toContain('![hover run](media/01-hover-run.png)\n<sub>hover run · the model, looking at this picture: “Yes, a tooltip.”</sub>');
+  expect(body).toContain('<details><summary>1 more screenshot</summary>');
+  expect(body.indexOf('02-claim-1-passed.png')).toBeGreaterThan(body.indexOf('<details><summary>1 more screenshot'));
+  expect(body).toContain('**Not checked:**\n\n- never looked at: no time');
+  expect(body).toContain('### Verdict\n⚠️ **Partially verified**: 1 of 2 claims hold, 1 could not be checked.\n- ✅ the tooltip shows\n- ⚠️ never looked at');
+  expect(body).toContain('[run 42 and result folder]');
+  expect(body).toContain('screenshot checks: 2 pictures in 1 min 40 s');
 });
 
 test('no recorded check means no_result, not a crash', () => {
@@ -78,8 +107,10 @@ test('untrusted text cannot mention, link or break out of a code block', () => {
 test('a skipped claim is not counted as passed in the headline', () => {
   const base = { pr: 1, repo: 'o/r', runner: 'linux', model: 'm', instruction: 'i', outcome: 'pass' as const, notes: '' };
   const passed = { claim: 'a', status: 'passed' as const, screenshots: [] };
-  expect(render({ ...base, checks: [passed] }, m => m, '', '')).toContain('## rvp: ✅ all checks passed');
-  expect(render({ ...base, checks: [passed, { claim: 'b', status: 'skipped', screenshots: [] }] }, m => m, '', '')).toContain('## rvp: ✅ 1 passed · ⚪ 1 not checked');
+  expect(render({ ...base, checks: [passed] }, m => m, '', '')).toContain('## rvp: ✅ Verified');
+  expect(render({ ...base, checks: [passed, { claim: 'b', status: 'skipped', screenshots: [] }] }, m => m, '', '')).toContain('## rvp: ⚠️ Partially verified');
+  expect(render({ ...base, checks: [passed, { claim: 'b', status: 'failed', screenshots: [] }] }, m => m, '', '')).toContain('## rvp: ❌ Not verified');
+  expect(render({ ...base, checks: [{ claim: 'b', status: 'skipped', screenshots: [] }] }, m => m, '', '')).toContain('## rvp: ⚠️ Not checked');
 });
 
 test('screenshots of one shot are grouped in a table', async () => {

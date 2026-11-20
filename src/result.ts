@@ -7,6 +7,8 @@ export type Check = {
   status: 'passed' | 'failed' | 'skipped';
   reason?: string;
   screenshots: string[];
+  /** What the model answered when it was shown a screenshot of this claim: does the picture show it? */
+  seen?: { file: string; shows: boolean; says: string }[];
 };
 
 export type Result = {
@@ -18,6 +20,8 @@ export type Result = {
   outcome: 'pass' | 'fail' | 'mixed' | 'no_result';
   checks: Check[];
   notes: string;
+  /** Facts about the run for the footer: how fast the model was, how long the screenshot checks took. */
+  facts?: string[];
 };
 
 const MEDIA = /^media\/[\w.-]+\.png$/;
@@ -58,6 +62,7 @@ export function finish(outDir: string, env: Record<string, string | undefined>):
         status: c.status,
         ...(typeof c.reason === 'string' ? { reason: c.reason.replace(ANSI, '').slice(0, 2000) } : {}),
         screenshots: (Array.isArray(c.screenshots) ? c.screenshots : []).filter((f: unknown) => typeof f === 'string' && MEDIA.test(f)),
+        ...(Array.isArray(c.seen) ? { seen: seen(c.seen) } : {}),
       }));
   } catch {
     // unreadable file: same as no check
@@ -74,10 +79,19 @@ export function finish(outDir: string, env: Record<string, string | undefined>):
     outcome: outcome(checks),
     checks,
     notes: withoutIds(notes.replace(ANSI, '')).slice(0, 4000),
+    // one line each, written by the last step of the agent job
+    facts: ['speed.txt', 'looked.txt'].flatMap(file => (read(join(outDir, file)) ?? '').split('\n').filter(line => line.trim()).slice(0, 1)).map(line => line.replace(ANSI, '').slice(0, 200)),
   };
   writeFileSync(join(outDir, 'result.json'), JSON.stringify(result, null, 2));
   return result;
 }
+
+/** The answers of the screenshot check, cut to what the comment needs. */
+const seen = (list: unknown[]): NonNullable<Check['seen']> =>
+  list
+    .filter((s: any) => typeof s?.file === 'string' && MEDIA.test(s.file) && typeof s.says === 'string')
+    .slice(0, 8)
+    .map((s: any) => ({ file: s.file, shows: s.shows === true, says: s.says.replace(ANSI, '').slice(0, 300) }));
 
 const PNG = [0x89, 0x50, 0x4e, 0x47];
 
@@ -114,6 +128,8 @@ export function check(outDir: string): Result {
       status: c.status,
       ...(c.reason === undefined ? {} : { reason: str(c.reason, 'reason') }),
       screenshots,
+      // only about files that passed the media check above
+      ...(Array.isArray(c.seen) ? { seen: seen(c.seen).filter(s => screenshots.includes(s.file)) } : {}),
     };
   });
   if (mediaCount > MAX_MEDIA) throw new Error(`too many media files (${mediaCount} > ${MAX_MEDIA})`);
@@ -126,5 +142,6 @@ export function check(outDir: string): Result {
     outcome: raw.outcome,
     checks,
     notes: str(raw.notes, 'notes'),
+    ...(Array.isArray(raw.facts) ? { facts: raw.facts.filter((f: unknown) => typeof f === 'string').slice(0, 4) } : {}),
   };
 }

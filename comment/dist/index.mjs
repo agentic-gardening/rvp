@@ -9,6 +9,8 @@ var MEDIA = /^media\/[\w.-]+\.png$/;
 var MAX_CHECKS = 50;
 var MAX_MEDIA = 40;
 var MAX_BYTES = 10 * 1024 * 1024;
+var ANSI = /\x1b\[[0-9;]*m/g;
+var seen = (list) => list.filter((s) => typeof s?.file === "string" && MEDIA.test(s.file) && typeof s.says === "string").slice(0, 8).map((s) => ({ file: s.file, shows: s.shows === true, says: s.says.replace(ANSI, "").slice(0, 300) }));
 var PNG = [137, 80, 78, 71];
 function checkMedia(outDir, rel) {
   if (typeof rel !== "string" || !MEDIA.test(rel))
@@ -48,7 +50,8 @@ function check(outDir) {
       claim: str(c.claim, "claim"),
       status: c.status,
       ...c.reason === undefined ? {} : { reason: str(c.reason, "reason") },
-      screenshots
+      screenshots,
+      ...Array.isArray(c.seen) ? { seen: seen(c.seen).filter((s) => screenshots.includes(s.file)) } : {}
     };
   });
   if (mediaCount > MAX_MEDIA)
@@ -61,21 +64,23 @@ function check(outDir) {
     instruction: str(raw.instruction, "instruction"),
     outcome: raw.outcome,
     checks,
-    notes: str(raw.notes, "notes")
+    notes: str(raw.notes, "notes"),
+    ...Array.isArray(raw.facts) ? { facts: raw.facts.filter((f) => typeof f === "string").slice(0, 4) } : {}
   };
 }
 
 // src/comment.ts
-var ICON = { passed: "✅", failed: "❌", skipped: "⚪" };
-var HEAD = {
-  pass: "✅ all checks passed",
-  fail: "❌ checks failed",
-  mixed: "⚠️ some checks failed",
-  no_result: "⚠️ no result"
-};
-var head = (result) => {
+var ICON = { passed: "✅", failed: "❌", skipped: "⚠️" };
+var verdict = (result) => {
   const count = (status) => result.checks.filter((c) => c.status === status).length;
-  return result.outcome === "pass" && count("skipped") ? `✅ ${count("passed")} passed · ⚪ ${count("skipped")} not checked` : HEAD[result.outcome];
+  const [passed, failed, skipped, all] = [count("passed"), count("failed"), count("skipped"), result.checks.length];
+  if (failed)
+    return `❌ **Not verified**: ${failed} of ${all} claim${all > 1 ? "s" : ""} ${failed > 1 ? "do" : "does"} not hold.`;
+  if (!passed)
+    return "⚠️ **Not checked**: the model gave no verdict.";
+  if (skipped)
+    return `⚠️ **Partially verified**: ${passed} of ${all} claims hold, ${skipped} could not be checked.`;
+  return `✅ **Verified**: ${all === 1 ? "the claim holds" : `${all} of ${all} claims hold`}.`;
 };
 var strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, "").replace(/[\u0000-\u0008\u000b-\u001f]/g, "");
 var inline = (s, max = 300) => strip(s).replace(/\s+/g, " ").slice(0, max).replace(/[\\`*_[\]#|!~>]/g, "\\$&").replace(/</g, "&lt;").replace(/@/g, "@​");
@@ -83,19 +88,28 @@ var block = (s, max, lang = "") => `~~~~${lang}
 ${strip(s).slice(0, max).replace(/~~~/g, "~~ ~")}
 ~~~~`;
 function render(result, url, runUrl, actions, plan = "") {
+  const overall = verdict(result);
   const out = [
-    `## rvp: ${head(result)}`,
+    `## rvp: ${overall.split(":")[0].replace(/\*\*/g, "")}`,
     "",
-    `> ${inline(result.instruction, 600)}`,
+    `Checked on ${inline(result.runner, 30)} with the build of this pull request running, by \`${inline(result.model, 60)}\`.`,
     "",
-    `Runner \`${inline(result.runner, 30)}\` · model \`${inline(result.model, 60)}\`${runUrl ? ` · [run and result folder](${runUrl})` : ""}`
+    `> ${inline(result.instruction, 600)}`
   ];
-  for (const c of result.checks) {
-    out.push("", `### ${ICON[c.status]} ${inline(c.claim)}`);
+  const skipped = [];
+  result.checks.forEach((c, i) => {
+    if (c.status === "skipped") {
+      skipped.push(`- ${inline(c.claim)}${c.reason ? `: ${inline(c.reason, 300)}` : ""}`, ...folded(groups(c.screenshots), url));
+      return;
+    }
+    out.push("", `**${i + 1}. ${inline(c.claim)}** ${ICON[c.status]}`);
     if (c.reason)
       out.push("", inline(c.reason, 600));
-    out.push(...screenshots(c.screenshots, url));
-  }
+    out.push(...pictures(c, url));
+  });
+  if (skipped.length)
+    out.push("", "**Not checked:**", "", ...skipped);
+  out.push("", "### Verdict", overall, ...result.checks.map((c) => `- ${ICON[c.status]} ${inline(c.claim)}`));
   if (plan.trim())
     out.push("", "<details><summary>What the agent planned</summary>", "", block(plan, 3000), "", "</details>");
   if (result.notes.trim())
@@ -103,26 +117,50 @@ function render(result, url, runUrl, actions, plan = "") {
   const steps = actions.split(`
 `).filter((line) => line.trim()).slice(0, 80);
   if (steps.length)
-    out.push("", "<details><summary>What the agent did</summary>", "", ...steps.map((step, i) => `${i + 1}. ${inline(step, 300)}`), "", "</details>");
-  out.push("", "<sub>A local model drove a build of this PR and recorded these verdicts itself. They are its judgement, not a proof: check the screenshots and the action log before relying on them.</sub>");
+    out.push("", `<details><summary>What the agent did (${steps.length} steps)</summary>`, "", ...steps.map((step, i) => `${i + 1}. ${inline(step, 300)}`), "", "</details>");
+  const run = /\/runs\/(\d+)/.exec(runUrl)?.[1];
+  out.push("", "---", `<sub>rvp · runner \`${inline(result.runner, 30)}\` · model \`${inline(result.model, 60)}\`${runUrl ? ` · [run ${run ?? ""} and result folder](${runUrl})` : ""}${(result.facts ?? []).map((fact) => ` · ${inline(fact, 200)}`).join("")}</sub>`, "<sub>A local model drove a build of this pull request and recorded these verdicts itself. They are its judgement, not a proof: check the screenshots and the action log before relying on them.</sub>");
   return out.join(`
 `).slice(0, 60000);
 }
-function screenshots(files, url) {
-  const groups = new Map;
+function groups(files) {
+  const found = new Map;
   for (const file of files) {
     const [, stem, dark] = /^(.*?)(\.dark)?\.png$/.exec(basename(file)) ?? [];
     if (!stem)
       continue;
-    groups.set(stem, { ...groups.get(stem), [dark ? "Dark" : "Light"]: file });
+    found.set(stem, { ...found.get(stem) ?? { stem, caption: inline(stem.replace(/^\d+-/, "").replace(/-/g, " ")) }, [dark ? "Dark" : "Light"]: file });
   }
+  return [...found.values()];
+}
+function folded(list, url, summary = `${list.length} screenshot${list.length > 1 ? "s" : ""}`) {
+  if (!list.length)
+    return [];
+  return ["", `<details><summary>${summary}</summary>`, ...screenshots(list.flatMap((g) => [g.Light, g.Dark].filter((f) => !!f)), url), "", "</details>"];
+}
+function pictures(c, url) {
+  const all = groups(c.screenshots);
+  if (!all.length)
+    return [];
+  const yes = c.seen?.find((s) => s.shows);
+  const main = all.find((g) => g.Light === yes?.file) ?? all.at(-1);
+  const first = main.Light ?? main.Dark;
+  const says = yes?.file === first ? yes.says : undefined;
+  const out = ["", `![${main.caption}](${url(first)})`, `<sub>${main.caption}${says ? ` · the model, looking at this picture: “${inline(says, 300)}”` : ""}</sub>`];
+  const rest = all.filter((g) => g !== main);
+  const twin = main.Light && main.Dark ? [{ ...main, Light: undefined }] : [];
+  const more = [...twin, ...rest];
+  const summary = [twin.length ? "Dark theme" : "", rest.length ? `${rest.length} more screenshot${rest.length > 1 ? "s" : ""}` : ""].filter(Boolean).join(" and ");
+  return [...out, ...folded(more, url, summary)];
+}
+function screenshots(files, url) {
   const out = [];
-  for (const [stem, group] of groups) {
-    const caption = inline(stem.replace(/^\d+-/, "").replace(/-/g, " "));
+  for (const group of groups(files)) {
+    const { caption } = group;
     const columns = ["Light", "Dark"].filter((column) => group[column]);
     const image = (column) => `![${caption}](${url(group[column])})`;
     if (columns.length === 1)
-      out.push("", image(columns[0]), `<sub>${caption}</sub>`);
+      out.push("", image(columns[0]), `<sub>${caption}${columns[0] === "Dark" ? " (dark theme)" : ""}</sub>`);
     else
       out.push("", `<sub>${caption}</sub>`, "", `| ${columns.join(" | ")} |`, `|${columns.map(() => "---").join("|")}|`, `| ${columns.map(image).join(" | ")} |`);
   }

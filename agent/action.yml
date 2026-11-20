@@ -23,6 +23,9 @@ inputs:
   temperature:
     description: Randomness of the model (0 to 2). Low makes two runs of the same task more alike.
     default: '0.2'
+  look-at-screenshots:
+    description: After the run, the model is shown the screenshots of each verdict and says whether they show it
+    default: 'true'
   thinking:
     description: How much the model reasons before each command (off, minimal, low, medium, high, xhigh, max). More is slower.
     default: max
@@ -316,17 +319,23 @@ runs:
         RVP_RUNNER: ${{ runner.os }}${{ runner.arch == 'ARM64' && ' arm64' || '' }}
         RVP_MODEL: ${{ inputs.model }}
         RVP_INSTRUCTION: ${{ inputs.instruction }}
+        LOOK: ${{ inputs.look-at-screenshots }}
       run: |
         if [ -f pd/rvp/pd.mjs ]; then
           # closing the app saves the video and the trace
           (cd pd && node rvp/pd.mjs stop) || true
           [ -f pd/rvp/notes.md ] && cp pd/rvp/notes.md "$RVP_OUT/notes.md"
         fi
-        node "$GITHUB_ACTION_PATH/dist/result.mjs" "$RVP_OUT"
+        # the model looks at the screenshots of its verdicts: which one shows the claim, and how long that took
+        if [ "$LOOK" = true ] && [ -f "$RVP_OUT/checks.json" ]; then
+          node "$GITHUB_ACTION_PATH/kit/see.mjs" "$RVP_OUT" || true
+          [ -f "$RVP_OUT/looked.txt" ] && cat "$RVP_OUT/looked.txt" >> "$GITHUB_STEP_SUMMARY"
+        fi
         # how fast the model was on this runner, to compare runners and models
         awk '/prompt eval time =/ { rms += $(NF-13); rt += $(NF-10) } / eval time =/ && !/prompt/ { wms += $(NF-13); wt += $(NF-10) }
              END { if (rms && wms) printf "Model speed: read %.0f tokens/s, wrote %.1f tokens/s (%d tokens written in %d min).\n", rt * 1000 / rms, wt * 1000 / wms, wt, wms / 60000 }' \
           "$RVP_OUT/ollama.log" 2> /dev/null | tee -a "$GITHUB_STEP_SUMMARY" "$RVP_OUT/speed.txt" || true
+        node "$GITHUB_ACTION_PATH/dist/result.mjs" "$RVP_OUT"
         # the run's Summary page: the comment without its images
         node "$GITHUB_ACTION_PATH/../comment/dist/index.mjs" --dry-run "$RVP_OUT" | grep -vE '\]\(media/|^\|' >> "$GITHUB_STEP_SUMMARY" || true
 
