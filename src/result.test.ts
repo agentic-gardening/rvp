@@ -54,7 +54,8 @@ test('one screenshot is shown for a claim: the one the model said shows it; the 
     'https://github.com/o/r/actions/runs/42',
     '',
   );
-  expect(body).toContain('## 🧩 Partially verified · 1 of 2 claims · `a1b2c3d` · Linux arm64 · 14 min');
+  expect(body).toContain('## 🧩 Partially verified · 1 of 2 claims · `a1b2c3d` · Linux arm64\n');
+  expect(body).toContain('<sub>14 min · checked by [rvp](https://github.com/agentic-gardening/rvp) · model `m` · [run 42 and result folder]');
   expect(body).toContain('| 1 | the tooltip shows | 🛡️ | 📏 measured in the app · 👁️ seen on the screenshot |\n| 2 | never looked at | 🚧 | not checked |');
   expect(body).toContain('### 1. the tooltip shows 🛡️');
   expect(body).toContain('📏 **Observed:** styled tooltip, shown above the button: "Run"');
@@ -114,7 +115,7 @@ test('untrusted text cannot mention, link or break out of a code block', () => {
 test('a skipped claim is not counted as passed in the headline', () => {
   const base = { pr: 1, repo: 'o/r', runner: 'linux', model: 'm', instruction: 'i', outcome: 'pass' as const, notes: '' };
   const passed = { claim: 'a', status: 'passed' as const, screenshots: [] };
-  expect(render({ ...base, checks: [passed] }, m => m, '', '')).toContain('## 🛡️ Verified · 1 of 1 claim');
+  expect(render({ ...base, checks: [passed] }, m => m, '', '')).toContain('## 🛡️ Verified · 1 of 1 claim · linux\n');
   expect(render({ ...base, checks: [passed, { claim: 'b', status: 'skipped', screenshots: [] }] }, m => m, '', '')).toContain('## 🧩 Partially verified');
   expect(render({ ...base, checks: [passed, { claim: 'b', status: 'failed', screenshots: [] }] }, m => m, '', '')).toContain('## 🐛 Not verified');
   expect(render({ ...base, checks: [{ claim: 'b', status: 'skipped', screenshots: [] }] }, m => m, '', '')).toContain('## 🚧 Not checked');

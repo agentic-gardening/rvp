@@ -44,10 +44,8 @@ export function render(result: Result, url: (media: string) => string, runUrl: s
   const env = result.environment;
   const [passed, all] = [result.checks.filter(c => c.status === 'passed').length, result.checks.length];
   const out: string[] = [
-    // what a reviewer needs before reading on: verdict, how many claims, which commit, where, how long
-    [`## ${verdict(result)}`, `${passed} of ${all} claim${all > 1 ? 's' : ''}`, env?.commit ? `\`${env.commit.slice(0, 7)}\`` : '', inline(result.runner, 30), env?.minutes ? `${env.minutes} min` : '']
-      .filter(Boolean)
-      .join(' · '),
+    // what a reviewer needs before reading on: verdict, how many claims, which commit, where
+    [`## ${verdict(result)}`, `${passed} of ${all} claim${all > 1 ? 's' : ''}`, env?.commit ? `\`${env.commit.slice(0, 7)}\`` : '', inline(result.runner, 30)].filter(Boolean).join(' · '),
     '',
     `> ${inline(result.instruction, 600)}`,
   ];
@@ -91,7 +89,7 @@ export function render(result: Result, url: (media: string) => string, runUrl: s
   out.push(
     '',
     '---',
-    `<sub>Checked by [rvp](https://github.com/agentic-gardening/rvp) · model \`${inline(result.model, 60)}\`${runUrl ? ` · [run ${run ?? ''} and result folder](${runUrl})` : ''}${(result.facts ?? []).map(fact => ` · ${inline(fact, 200)}`).join('')}</sub>`,
+    `<sub>${env?.minutes ? `${env.minutes} min · ` : ''}checked by [rvp](https://github.com/agentic-gardening/rvp) · model \`${inline(result.model, 60)}\`${runUrl ? ` · [run ${run ?? ''} and result folder](${runUrl})` : ''}${(result.facts ?? []).map(fact => ` · ${inline(fact, 200)}`).join('')}</sub>`,
     '<sub>A local model drove a build of this pull request and recorded these verdicts itself. 📏 was measured by the tool in the app; 👁️ and 💬 are the model\'s judgement, not a proof.</sub>',
     // for another tool: the outcome without parsing the text. Only fixed words and a commit that was checked to be hex.
     `<!-- rvp-result: ${JSON.stringify({ outcome: result.outcome, commit: env?.commit ?? '', claims: result.checks.map(c => c.status) })} -->`,

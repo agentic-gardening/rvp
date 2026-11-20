@@ -113,7 +113,7 @@ function render(result, url, runUrl, actions, plan = "") {
   const env = result.environment;
   const [passed, all] = [result.checks.filter((c) => c.status === "passed").length, result.checks.length];
   const out = [
-    [`## ${verdict(result)}`, `${passed} of ${all} claim${all > 1 ? "s" : ""}`, env?.commit ? `\`${env.commit.slice(0, 7)}\`` : "", inline(result.runner, 30), env?.minutes ? `${env.minutes} min` : ""].filter(Boolean).join(" · "),
+    [`## ${verdict(result)}`, `${passed} of ${all} claim${all > 1 ? "s" : ""}`, env?.commit ? `\`${env.commit.slice(0, 7)}\`` : "", inline(result.runner, 30)].filter(Boolean).join(" · "),
     "",
     `> ${inline(result.instruction, 600)}`
   ];
@@ -153,7 +153,7 @@ function render(result, url, runUrl, actions, plan = "") {
   if (result.notes.trim())
     out.push("", "<details><summary>Agent notes</summary>", "", block(result.notes, 3000), "", "</details>");
   const run = /\/runs\/(\d+)/.exec(runUrl)?.[1];
-  out.push("", "---", `<sub>Checked by [rvp](https://github.com/agentic-gardening/rvp) · model \`${inline(result.model, 60)}\`${runUrl ? ` · [run ${run ?? ""} and result folder](${runUrl})` : ""}${(result.facts ?? []).map((fact) => ` · ${inline(fact, 200)}`).join("")}</sub>`, "<sub>A local model drove a build of this pull request and recorded these verdicts itself. \uD83D\uDCCF was measured by the tool in the app; \uD83D\uDC41️ and \uD83D\uDCAC are the model's judgement, not a proof.</sub>", `<!-- rvp-result: ${JSON.stringify({ outcome: result.outcome, commit: env?.commit ?? "", claims: result.checks.map((c) => c.status) })} -->`);
+  out.push("", "---", `<sub>${env?.minutes ? `${env.minutes} min · ` : ""}checked by [rvp](https://github.com/agentic-gardening/rvp) · model \`${inline(result.model, 60)}\`${runUrl ? ` · [run ${run ?? ""} and result folder](${runUrl})` : ""}${(result.facts ?? []).map((fact) => ` · ${inline(fact, 200)}`).join("")}</sub>`, "<sub>A local model drove a build of this pull request and recorded these verdicts itself. \uD83D\uDCCF was measured by the tool in the app; \uD83D\uDC41️ and \uD83D\uDCAC are the model's judgement, not a proof.</sub>", `<!-- rvp-result: ${JSON.stringify({ outcome: result.outcome, commit: env?.commit ?? "", claims: result.checks.map((c) => c.status) })} -->`);
   return out.join(`
 `).slice(0, 60000);
 }
