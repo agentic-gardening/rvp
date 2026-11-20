@@ -583,8 +583,7 @@ async function serve(extensions) {
     // At least 14 pixels: the real checkbox of a switch is one hidden pixel.
     if (boxes.length)
       await js(`(${JSON.stringify(boxes)}).forEach(b => { const w = Math.max(b.width, 14), h = Math.max(b.height, 14); document.body.insertAdjacentHTML('beforeend', '<div class="rvp-outline" style="position:fixed;left:' + (b.x - (w - b.width) / 2) + 'px;top:' + (b.y - (h - b.height) / 2) + 'px;width:' + w + 'px;height:' + h + 'px;border:3px solid red;box-sizing:border-box;pointer-events:none;z-index:2147483647"></div>'); })`);
-    await capture(stem, bothThemes);
-    // the same moment, only around the frames: the model that looks at the screenshots afterwards (see.mjs) needs
+    // first, only around the frames (before the other theme is shown: a tooltip does not survive that): the model that looks at the screenshots afterwards (see.mjs) needs
     // a minute and a half for a whole window on a CPU, and a third of that for this part. Not shown in the comment.
     if (boxes.length) {
       const x0 = Math.min(...boxes.map(b => b.x)) - 40, y0 = Math.min(...boxes.map(b => b.y)) - 40;
@@ -593,7 +592,9 @@ async function serve(extensions) {
       const w = Math.max(x1 - x0, 500), h = Math.max(y1 - y0, 250), left = (x0 + x1 - w) / 2, top = (y0 + y1 - h) / 2;
       await js(`document.body.insertAdjacentHTML('beforeend', '<div id="rvp-crop" class="rvp-outline" style="position:fixed;left:' + Math.max(0, Math.min(${left}, innerWidth - ${w})) + 'px;top:' + Math.max(0, Math.min(${top}, innerHeight - ${h})) + 'px;width:${w}px;height:${h}px;max-width:100vw;max-height:100vh;pointer-events:none;z-index:2147483646"></div>')`);
       await ab('screenshot', '#rvp-crop', join(out, `${stem}.small.png`)).catch(() => {});
+      await js(`document.getElementById('rvp-crop')?.remove()`);
     }
+    await capture(stem, bothThemes);
     await js(`document.querySelectorAll('.rvp-outline').forEach(el => el.remove())`);
     return [`${stem}.png`, missing.length ? ` (no element ${missing.join(', ')} in the window now: not outlined)` : ''];
   }
