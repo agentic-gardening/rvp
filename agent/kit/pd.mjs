@@ -709,6 +709,10 @@ async function serve(extensions) {
     }
     if (changed.length) parts.push(`Changed: ${changed.slice(0, 5).map(line => line.replace(/^- /, '')).join('; ')}`);
     if (left.length) parts.push(`Gone: ${left.length} lines (${left[0].replace(/^- /, '').slice(0, 60)}${left.length > 1 ? ', ...' : ''})`);
+    // a list was filtered (a search field): what stayed neither appeared nor went, so the change alone hides
+    // the one result. Say what the window shows now. Three runs searched the catalog and never saw the match.
+    if (left.length >= 10 && fresh.length < left.length)
+      return `${done}\n${first}\n${left.length} lines went away. The window now shows:\n${cut(now.filter(line => !line.trim().startsWith('- navigation')), 900, HINT)}`;
     const body = parts.length ? cut(parts, 600, 'Use: look to see the window.') : 'Nothing changed in the window.';
     // a loop gives the same answer again and again: say so in one line
     const told = body.replace(/ \[id=\w+\]/g, '');
