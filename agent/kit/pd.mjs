@@ -10,6 +10,7 @@ import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { crop } from './crop.mjs';
 
 const PORT = 47615;
 // element ids of the window tree, as agent-browser gives them: e12
@@ -550,27 +551,6 @@ async function serve(extensions) {
     return [found, args];
   };
 
-  /** A part of the window as a picture, through the browser's own protocol: nothing is moved or scrolled. */
-  async function clip(rect, file) {
-    const pages = await (await fetch(`http://127.0.0.1:${CDP}/json/list`)).json();
-    const page = pages.find(p => p.type === 'page' && !p.url.startsWith('devtools:'));
-    const socket = new WebSocket(page.webSocketDebuggerUrl);
-    try {
-      const data = await new Promise((done, fail) => {
-        setTimeout(() => fail(new Error('no answer')), 10_000);
-        socket.onerror = () => fail(new Error('no connection'));
-        socket.onopen = () => socket.send(JSON.stringify({ id: 1, method: 'Page.captureScreenshot', params: { format: 'png', clip: rect } }));
-        socket.onmessage = event => {
-          const answer = JSON.parse(event.data);
-          if (answer.id === 1) answer.result ? done(answer.result.data) : fail(new Error(answer.error?.message));
-        };
-      });
-      writeFileSync(file, Buffer.from(data, 'base64'));
-    } finally {
-      socket.close();
-    }
-  }
-
   async function capture(stem, all = true) {
     const files = [];
     for (const [suffix, scheme] of all ? themes : themes.slice(0, 1)) {
@@ -604,19 +584,23 @@ async function serve(extensions) {
     // At least 14 pixels: the real checkbox of a switch is one hidden pixel.
     if (boxes.length)
       await js(`(${JSON.stringify(boxes)}).forEach(b => { const w = Math.max(b.width, 14), h = Math.max(b.height, 14); document.body.insertAdjacentHTML('beforeend', '<div class="rvp-outline" style="position:fixed;left:' + (b.x - (w - b.width) / 2) + 'px;top:' + (b.y - (h - b.height) / 2) + 'px;width:' + w + 'px;height:' + h + 'px;border:3px solid red;box-sizing:border-box;pointer-events:none;z-index:2147483647"></div>'); })`);
-    // first, only around the frames: the model that looks at the screenshots afterwards (see.mjs) needs a minute and
-    // a half for a whole window on a CPU, and a third of that for this part. Not shown in the comment. Asked to the
-    // browser directly: agent-browser's screenshot of an element makes a tooltip go away on Linux.
-    if (boxes.length) {
-      const x0 = Math.min(...boxes.map(b => b.x)) - 40, y0 = Math.min(...boxes.map(b => b.y)) - 40;
-      const x1 = Math.max(...boxes.map(b => b.x + b.width)) + 40, y1 = Math.max(...boxes.map(b => b.y + b.height)) + 40;
-      // at least 500x250 around the middle, so that a lone button comes with its row and its tooltip
-      const [vw, vh] = await js('[innerWidth, innerHeight]');
-      const width = Math.min(Math.max(x1 - x0, 500), vw), height = Math.min(Math.max(y1 - y0, 250), vh);
-      const x = Math.max(0, Math.min((x0 + x1 - width) / 2, vw - width)), y = Math.max(0, Math.min((y0 + y1 - height) / 2, vh - height));
-      await clip({ x, y, width, height, scale: 1 }, join(out, `${stem}.small.png`)).catch(() => {});
-    }
     await capture(stem, bothThemes);
+    // the part around the frames, cut out of the picture just taken: the model that looks at the screenshots
+    // afterwards (see.mjs) needs a minute and a half for a whole window on a CPU, and 15 seconds for this part.
+    // Not shown in the comment. Not a second screenshot: one of a part of the window makes a tooltip go away on Linux.
+    if (boxes.length)
+      try {
+        const x0 = Math.min(...boxes.map(b => b.x)) - 40, y0 = Math.min(...boxes.map(b => b.y)) - 40;
+        const x1 = Math.max(...boxes.map(b => b.x + b.width)) + 40, y1 = Math.max(...boxes.map(b => b.y + b.height)) + 40;
+        // at least 500x250 around the middle, so that a lone button comes with its row and its tooltip
+        const [vw, vh] = await js('[innerWidth, innerHeight]');
+        const width = Math.min(Math.max(x1 - x0, 500), vw), height = Math.min(Math.max(y1 - y0, 250), vh);
+        const x = Math.max(0, Math.min((x0 + x1 - width) / 2, vw - width)), y = Math.max(0, Math.min((y0 + y1 - height) / 2, vh - height));
+        const png = readFileSync(join(out, `${stem}.png`)), k = png.readUInt32BE(16) / vw; // picture pixels per page pixel
+        writeFileSync(join(out, `${stem}.small.png`), crop(png, x * k, y * k, width * k, height * k));
+      } catch {
+        // no small picture: this screenshot is not looked at
+      }
     await js(`document.querySelectorAll('.rvp-outline').forEach(el => el.remove())`);
     return [`${stem}.png`, missing.length ? ` (no element ${missing.join(', ')} in the window now: not outlined)` : ''];
   }
