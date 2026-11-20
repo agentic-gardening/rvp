@@ -26,6 +26,9 @@ inputs:
   look-at-screenshots:
     description: After the run, the model is shown the screenshots of each verdict and says whether they show it
     default: 'true'
+  screenshot-model:
+    description: The small model that looks at the screenshots (the main one needs minutes per picture on a CPU)
+    default: bonsai-2:2b
   thinking:
     description: How much the model reasons before each command (off, minimal, low, medium, high, xhigh, max). More is slower.
     default: max
@@ -67,7 +70,7 @@ runs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/rvp-tools
-        key: rvp-tools-${{ runner.os }}-${{ runner.arch }}-ollama0.40.16-pi1.5.2-ab0.43.0-${{ inputs.model }}
+        key: rvp-tools-${{ runner.os }}-${{ runner.arch }}-ollama0.40.16-pi1.5.2-ab0.43.0-${{ inputs.model }}-${{ inputs.screenshot-model }}
 
     - name: download ollama, pi and agent-browser
       if: steps.tools.outputs.cache-hit != 'true'
@@ -112,6 +115,7 @@ runs:
       shell: bash
       env:
         MODEL: ${{ inputs.model }}
+        SEE_MODEL: ${{ inputs.look-at-screenshots == 'true' && inputs.screenshot-model || '' }}
         TEMPERATURE: ${{ inputs.temperature }}
       run: |
         ollama=$(find "$RVP_TOOLS/ollama" -type f \( -name ollama -o -name ollama.exe \) | head -1)
@@ -129,6 +133,8 @@ runs:
         # the same model with less random sampling. No fixed seed: with one, a retry repeats a failed run step for step
         printf 'FROM %s\nPARAMETER temperature %s\n' "$MODEL" "$TEMPERATURE" > "$RUNNER_TEMP/Modelfile"
         "$ollama" create rvp-run -f "$RUNNER_TEMP/Modelfile" >> "$RVP_OUT/ollama-pull.log" 2>&1 && echo "RVP_RUN_MODEL=rvp-run" >> "$GITHUB_ENV" || echo "could not set the temperature: the model runs with its defaults"
+        # without it the screenshots are not looked at: the run does not depend on it
+        if [ -n "$SEE_MODEL" ]; then "$ollama" pull "$SEE_MODEL" >> "$RVP_OUT/ollama-pull.log" 2>&1 && echo "RVP_SEE_MODEL=$SEE_MODEL" >> "$GITHUB_ENV" || echo "could not pull $SEE_MODEL: the screenshots will not be looked at"; fi
         echo "done in ${SECONDS}s"
 
     - name: save ollama, pi, agent-browser and the model
@@ -346,7 +352,7 @@ runs:
           [ -f pd/rvp/notes.md ] && cp pd/rvp/notes.md "$RVP_OUT/notes.md"
         fi
         # the model looks at the screenshots of its verdicts: which one shows the claim, and how long that took
-        if [ "$LOOK" = true ] && [ -f "$RVP_OUT/checks.json" ]; then
+        if [ "$LOOK" = true ] && [ -n "$RVP_SEE_MODEL" ] && [ -f "$RVP_OUT/checks.json" ]; then
           node "$GITHUB_ACTION_PATH/kit/see.mjs" "$RVP_OUT" || true
           [ -f "$RVP_OUT/looked.txt" ] && cat "$RVP_OUT/looked.txt" >> "$GITHUB_STEP_SUMMARY"
         fi

@@ -180,7 +180,7 @@ function pictures(c, url) {
   const main = all.find((g) => g.Light === yes?.file) ?? all.at(-1);
   const first = main.Light ?? main.Dark;
   const says = yes?.file === first ? yes.says : undefined;
-  const out = ["", `![${main.caption}](${url(first)})`, `<sub>${main.caption}${says ? ` · the model, looking at this picture: “${inline(says, 300)}”` : ""}</sub>`];
+  const out = ["", `![${main.caption}](${url(first)})`, `<sub>${main.caption}${says ? ` · a second model, looking at this picture: “${inline(says, 300)}”` : ""}</sub>`];
   const rest = all.filter((g) => g !== main);
   const twin = main.Light && main.Dark ? [{ ...main, Light: undefined }] : [];
   const more = [...twin, ...rest];

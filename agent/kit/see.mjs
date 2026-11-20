@@ -2,13 +2,16 @@
 // whether the picture shows what it wrote. Its answers go into checks.json (`seen`), and the comment shows
 // the first picture answered "yes". Not during the run: a second request to Ollama throws away the
 // conversation it keeps in memory.
-//   node see.mjs <result folder>     model: RVP_RUN_MODEL or RVP_MODEL, Ollama on 127.0.0.1:11434
+//   node see.mjs <result folder>     model: RVP_SEE_MODEL (a small one: a 9B model needs 5 minutes per
+//   picture on a CPU), else RVP_RUN_MODEL or RVP_MODEL. Ollama on 127.0.0.1:11434
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
 const out = process.argv[2];
-const model = process.env.RVP_RUN_MODEL || process.env.RVP_MODEL;
-const MAX = 8; // pictures per run: about a minute each on a CPU
+const model = process.env.RVP_SEE_MODEL || process.env.RVP_RUN_MODEL || process.env.RVP_MODEL;
+const MAX = 8; // pictures per run
+const PER_PICTURE = 150_000;
+const TOTAL = 300_000; // the whole check: it must not cost more than the run it checks
 const PER_CLAIM = 3;
 
 const words = text => new Set(String(text).toLowerCase().match(/[a-z0-9]{3,}/g) ?? []);
@@ -18,12 +21,12 @@ const span = seconds => (seconds < 60 ? `${seconds} s` : `${Math.floor(seconds /
 async function ask(file, check) {
   const response = await fetch('http://127.0.0.1:11434/api/chat', {
     method: 'POST',
-    signal: AbortSignal.timeout(300_000),
+    signal: AbortSignal.timeout(PER_PICTURE),
     body: JSON.stringify({
       model,
       stream: false,
       think: false,
-      options: { temperature: 0, num_predict: 120 },
+      options: { temperature: 0, num_predict: 120, num_ctx: 8192 },
       messages: [
         {
           role: 'user',
@@ -56,7 +59,7 @@ try {
       .slice(0, PER_CLAIM);
     check.seen = [];
     for (const { file } of candidates) {
-      if (looked >= MAX) break;
+      if (looked >= MAX || Date.now() - started > TOTAL) break;
       const at = Date.now();
       const answer = await ask(file, check);
       looked++;
@@ -70,7 +73,7 @@ try {
   say(`screenshot check stopped: ${String(error.message ?? error).slice(0, 200)}`);
 }
 if (looked) {
-  const total = `screenshot checks: ${looked} picture${looked > 1 ? 's' : ''} in ${span(Math.round((Date.now() - started) / 1000))}`;
+  const total = `screenshot checks: ${looked} picture${looked > 1 ? 's' : ''} in ${span(Math.round((Date.now() - started) / 1000))} by ${model}`;
   say(total);
   writeFileSync(join(out, 'looked.txt'), `${total}\n`);
   writeFileSync(join(out, 'checks.json'), JSON.stringify(checks, null, 2));

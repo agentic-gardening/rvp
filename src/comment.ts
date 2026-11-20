@@ -129,7 +129,7 @@ function pictures(c: Result['checks'][number], url: (media: string) => string): 
   // Only a "yes" is used. ponytail: its "no" was wrong for two true claims out of three tried (an icon it called
   // generic, a layout it measured by eye), so a "no" neither warns nor is quoted; it stays in result.json.
   const says = yes?.file === first ? yes.says : undefined;
-  const out = ['', `![${main.caption}](${url(first)})`, `<sub>${main.caption}${says ? ` · the model, looking at this picture: “${inline(says, 300)}”` : ''}</sub>`];
+  const out = ['', `![${main.caption}](${url(first)})`, `<sub>${main.caption}${says ? ` · a second model, looking at this picture: “${inline(says, 300)}”` : ''}</sub>`];
   const rest = all.filter(g => g !== main);
   const twin: Group[] = main.Light && main.Dark ? [{ ...main, Light: undefined }] : [];
   const more = [...twin, ...rest];

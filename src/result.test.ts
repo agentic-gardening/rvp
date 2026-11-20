@@ -63,7 +63,7 @@ test('one screenshot is shown for a claim: the one the model said shows it; the 
   expect(body).toContain('commit `a1b2c3d4e5f6` (head of the pull request) · Podman Desktop 1.31.0 · podman 5.7.0');
   expect(body).toContain('<!-- rvp-result: {"outcome":"pass","commit":"a1b2c3d4e5f6a7b8","claims":["passed","skipped"]} -->');
   expect(body).not.toMatch(/✅|❌/);
-  expect(body).toContain('![hover run](media/01-hover-run.png)\n<sub>hover run · the model, looking at this picture: “Yes, a tooltip.”</sub>');
+  expect(body).toContain('![hover run](media/01-hover-run.png)\n<sub>hover run · a second model, looking at this picture: “Yes, a tooltip.”</sub>');
   expect(body).toContain('<details><summary>1 more screenshot</summary>');
   expect(body.indexOf('02-claim-1-passed.png')).toBeGreaterThan(body.indexOf('<details><summary>1 more screenshot'));
   expect(body).toContain('### Not checked\n\n- 2. never looked at: no time\n- Only Linux arm64 was run, once: a rerun can differ.');
