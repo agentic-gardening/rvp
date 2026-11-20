@@ -35,9 +35,10 @@ async function ask(file, check) {
           role: 'user',
           images: [readFileSync(join(out, small(file))).toString('base64')],
           // only what the tester wrote, as one statement: with the claim and "the tester says it is true" around it,
-          // the models described the right thing and still answered "no"
+          // the models described the right thing and still answered "no". Not a word about the red frame: told of it,
+          // the model answers "no, the frame is around the button, not around the tooltip"
           content:
-            `This is a part of a screenshot of the Podman Desktop app; a red frame marks one element. Statement: "${check.reason ?? check.claim}". ` +
+            `This is a part of a screenshot of the Podman Desktop app. Statement: "${check.reason ?? check.claim}". ` +
             'Is the statement true for this picture? Words may be drawn with wide gaps between them. ' +
             'First word of your answer: yes or no. Then one short sentence saying what you see.',
         },
