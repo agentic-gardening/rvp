@@ -45,7 +45,7 @@ export function render(result: Result, url: (media: string) => string, runUrl: s
   const [passed, all] = [result.checks.filter(c => c.status === 'passed').length, result.checks.length];
   const out: string[] = [
     // what a reviewer needs before reading on: verdict, how many claims, which commit, where, how long
-    [`## rvp: ${verdict(result)}`, `${passed} of ${all} claim${all > 1 ? 's' : ''}`, env?.commit ? `\`${env.commit.slice(0, 7)}\`` : '', inline(result.runner, 30), env?.minutes ? `${env.minutes} min` : '']
+    [`## ${verdict(result)}`, `${passed} of ${all} claim${all > 1 ? 's' : ''}`, env?.commit ? `\`${env.commit.slice(0, 7)}\`` : '', inline(result.runner, 30), env?.minutes ? `${env.minutes} min` : '']
       .filter(Boolean)
       .join(' · '),
     '',
@@ -91,7 +91,7 @@ export function render(result: Result, url: (media: string) => string, runUrl: s
   out.push(
     '',
     '---',
-    `<sub>rvp · model \`${inline(result.model, 60)}\`${runUrl ? ` · [run ${run ?? ''} and result folder](${runUrl})` : ''}${(result.facts ?? []).map(fact => ` · ${inline(fact, 200)}`).join('')}</sub>`,
+    `<sub>Checked by [rvp](https://github.com/agentic-gardening/rvp) · model \`${inline(result.model, 60)}\`${runUrl ? ` · [run ${run ?? ''} and result folder](${runUrl})` : ''}${(result.facts ?? []).map(fact => ` · ${inline(fact, 200)}`).join('')}</sub>`,
     '<sub>A local model drove a build of this pull request and recorded these verdicts itself. 📏 was measured by the tool in the app; 👁️ and 💬 are the model\'s judgement, not a proof.</sub>',
     // for another tool: the outcome without parsing the text. Only fixed words and a commit that was checked to be hex.
     `<!-- rvp-result: ${JSON.stringify({ outcome: result.outcome, commit: env?.commit ?? '', claims: result.checks.map(c => c.status) })} -->`,
@@ -234,7 +234,7 @@ async function checkRun(token: string, repo: string, pr: number, result: Result,
     const conclusion = words.includes('Not verified') ? 'failure' : words.includes('Verified') && !words.includes('Partially') ? 'success' : 'neutral';
     const passed = result.checks.filter(c => c.status === 'passed').length;
     const run = await api(token, 'POST', `/repos/${repo}/check-runs`, {
-      name: 'rvp',
+      name: 'Pull request verification',
       head_sha: head,
       status: 'completed',
       conclusion,
