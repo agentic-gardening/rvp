@@ -2,16 +2,15 @@
 // whether the picture shows what it wrote. Its answers go into checks.json (`seen`), and the comment shows
 // the first picture answered "yes". Not during the run: a second request to Ollama throws away the
 // conversation it keeps in memory.
-//   node see.mjs <result folder>     model: RVP_SEE_MODEL (a small one: a 9B model needs 5 minutes per
-//   picture on a CPU), else RVP_RUN_MODEL or RVP_MODEL. Ollama on 127.0.0.1:11434
+//   node see.mjs <result folder>     model: RVP_SEE_MODEL, else the one of the run (RVP_RUN_MODEL or RVP_MODEL). Ollama on 127.0.0.1:11434
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
 const out = process.argv[2];
 const model = process.env.RVP_SEE_MODEL || process.env.RVP_RUN_MODEL || process.env.RVP_MODEL;
 const MAX = 8; // pictures per run
-const PER_PICTURE = 60_000;
-const TOTAL = 180_000; // the whole check: it must not cost more than the run it checks
+const PER_PICTURE = 120_000;
+const TOTAL = 300_000; // the whole check: it must not cost more than the run it checks
 const PER_CLAIM = 3;
 
 const words = text => new Set(String(text).toLowerCase().match(/[a-z0-9]{3,}/g) ?? []);
@@ -35,10 +34,12 @@ async function ask(file, check) {
         {
           role: 'user',
           images: [readFileSync(join(out, small(file))).toString('base64')],
+          // only what the tester wrote, as one statement: with the claim and "the tester says it is true" around it,
+          // the models described the right thing and still answered "no"
           content:
-            `This is a part of a screenshot of the Podman Desktop app. A tester checked this claim: "${check.claim}". ` +
-            `The tester says it is ${check.status === 'passed' ? 'true' : 'false'} and wrote: "${check.reason ?? ''}". ` +
-            'Does this screenshot show what the tester wrote? Answer yes or no, then one short sentence saying what you see.',
+            `This is a part of a screenshot of the Podman Desktop app; a red frame marks one element. Statement: "${check.reason ?? check.claim}". ` +
+            'Is the statement true for this picture? Words may be drawn with wide gaps between them. ' +
+            'First word of your answer: yes or no. Then one short sentence saying what you see.',
         },
       ],
     }),
@@ -77,7 +78,7 @@ try {
   say(`screenshot check stopped: ${String(error.message ?? error).slice(0, 200)}`);
 }
 if (looked) {
-  const total = `screenshot checks: ${looked} picture${looked > 1 ? 's' : ''} in ${span(Math.round((Date.now() - started) / 1000))} by ${model}`;
+  const total = `screenshot checks: ${looked} picture${looked > 1 ? 's' : ''} in ${span(Math.round((Date.now() - started) / 1000))} by ${process.env.RVP_SEE_MODEL || process.env.RVP_MODEL || model}`;
   say(total);
   writeFileSync(join(out, 'looked.txt'), `${total}\n`);
   writeFileSync(join(out, 'checks.json'), JSON.stringify(checks, null, 2));

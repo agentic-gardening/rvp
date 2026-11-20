@@ -27,8 +27,8 @@ inputs:
     description: After the run, the model is shown the screenshots of each verdict and says whether they show it
     default: 'true'
   screenshot-model:
-    description: The small model that looks at the screenshots (the main one needs minutes per picture on a CPU)
-    default: bonsai-2:2b
+    description: Another Ollama model to look at the screenshots. Empty is the model of the run
+    default: ''
   thinking:
     description: How much the model reasons before each command (off, minimal, low, medium, high, xhigh, max). More is slower.
     default: max
@@ -133,8 +133,8 @@ runs:
         # the same model with less random sampling. No fixed seed: with one, a retry repeats a failed run step for step
         printf 'FROM %s\nPARAMETER temperature %s\n' "$MODEL" "$TEMPERATURE" > "$RUNNER_TEMP/Modelfile"
         "$ollama" create rvp-run -f "$RUNNER_TEMP/Modelfile" >> "$RVP_OUT/ollama-pull.log" 2>&1 && echo "RVP_RUN_MODEL=rvp-run" >> "$GITHUB_ENV" || echo "could not set the temperature: the model runs with its defaults"
-        # without it the screenshots are not looked at: the run does not depend on it
-        if [ -n "$SEE_MODEL" ]; then "$ollama" pull "$SEE_MODEL" >> "$RVP_OUT/ollama-pull.log" 2>&1 && echo "RVP_SEE_MODEL=$SEE_MODEL" >> "$GITHUB_ENV" || echo "could not pull $SEE_MODEL: the screenshots will not be looked at"; fi
+        # without it the model of the run looks at the screenshots
+        if [ -n "$SEE_MODEL" ]; then "$ollama" pull "$SEE_MODEL" >> "$RVP_OUT/ollama-pull.log" 2>&1 && echo "RVP_SEE_MODEL=$SEE_MODEL" >> "$GITHUB_ENV" || echo "could not pull $SEE_MODEL: the model of the run looks at the screenshots"; fi
         echo "done in ${SECONDS}s"
 
     - name: save ollama, pi, agent-browser and the model
@@ -352,7 +352,7 @@ runs:
           [ -f pd/rvp/notes.md ] && cp pd/rvp/notes.md "$RVP_OUT/notes.md"
         fi
         # the model looks at the screenshots of its verdicts: which one shows the claim, and how long that took
-        if [ "$LOOK" = true ] && [ -n "$RVP_SEE_MODEL" ] && [ -f "$RVP_OUT/checks.json" ]; then
+        if [ "$LOOK" = true ] && [ -f "$RVP_OUT/checks.json" ]; then
           node "$GITHUB_ACTION_PATH/kit/see.mjs" "$RVP_OUT" || true
           [ -f "$RVP_OUT/looked.txt" ] && cat "$RVP_OUT/looked.txt" >> "$GITHUB_STEP_SUMMARY"
         fi
